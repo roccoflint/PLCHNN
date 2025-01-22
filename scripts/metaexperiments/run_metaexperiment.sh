@@ -57,8 +57,8 @@ generate_signific_connections() {
 }
 
 # Define parameter grids
-declare -a N_LAYERS=(2)  # Only test 2-layer networks
-declare -a LAYER_SIZES=(100 256 512)  # Test different layer sizes
+declare -a N_LAYERS=(1 2)
+declare -a LAYER_SIZES=(100 256)
 declare -a PATHWAY_INTERACTION=("True" "False")
 
 # Check and install rsync on remote if needed

@@ -14,7 +14,8 @@ from core.network import HebbianNetwork, to_device
 from core.utils import (
     load_mnist, get_minibatch, visualize_weights,
     compute_class_averages, plot_association_matrix,
-    cosine_similarity, plot_reconstructions
+    cosine_similarity, plot_reconstructions, plot_confusion_matrix,
+    plot_reconstruction_similarity_matrix
 )
 import matplotlib.pyplot as plt
 from tqdm import tqdm, trange
@@ -70,30 +71,6 @@ def compute_confusion_matrix(true_labels, pred_labels, num_classes=10):
     for t, p in zip(true_labels, pred_labels):
         conf_matrix[t, p] += 1
     return conf_matrix
-
-def plot_confusion_matrix(conf_matrix, save_path):
-    """Plot and save confusion matrix."""
-    fig, ax = plt.figure(figsize=(10, 10)), plt.gca()
-    im = ax.imshow(conf_matrix, cmap='Blues')
-    
-    # Add colorbar
-    plt.colorbar(im)
-    
-    # Add labels
-    ax.set_xticks(np.arange(10))
-    ax.set_yticks(np.arange(10))
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('True')
-    
-    # Add numbers
-    for i in range(10):
-        for j in range(10):
-            text = ax.text(j, i, conf_matrix[i, j],
-                         ha="center", va="center", color="black")
-    
-    plt.title('Confusion Matrix')
-    plt.savefig(save_path)
-    plt.close()
 
 def train_hebbian_mnist(
     layer_sizes=[784, 100],
@@ -222,10 +199,14 @@ def train_hebbian_mnist(
     test_conf_decoder = compute_confusion_matrix(labels_test_cpu, decoder.predict(test_repr))
     
     # Save confusion matrices
-    plot_confusion_matrix(train_conf_rts, os.path.join(run_dir, 'train_confusion_rts.png'))
-    plot_confusion_matrix(test_conf_rts, os.path.join(run_dir, 'test_confusion_rts.png'))
-    plot_confusion_matrix(train_conf_decoder, os.path.join(run_dir, 'train_confusion_decoder.png'))
-    plot_confusion_matrix(test_conf_decoder, os.path.join(run_dir, 'test_confusion_decoder.png'))
+    plot_confusion_matrix(train_conf_rts, os.path.join(run_dir, 'train_confusion_rts.png'),
+                         title='Training Confusion Matrix (RtS)', normalize=True)
+    plot_confusion_matrix(test_conf_rts, os.path.join(run_dir, 'test_confusion_rts.png'),
+                         title='Test Confusion Matrix (RtS)', normalize=True)
+    plot_confusion_matrix(train_conf_decoder, os.path.join(run_dir, 'train_confusion_decoder.png'),
+                         title='Training Confusion Matrix (Decoder)', normalize=True)
+    plot_confusion_matrix(test_conf_decoder, os.path.join(run_dir, 'test_confusion_decoder.png'),
+                         title='Test Confusion Matrix (Decoder)', normalize=True)
     
     # Print and save results
     print(f"\nResults:")
@@ -284,6 +265,13 @@ def train_hebbian_mnist(
         reconstructions,
         class_averages,
         os.path.join(run_dir, 'str_rec_reconstructions.png')
+    )
+    
+    # Plot reconstruction similarity matrix
+    plot_reconstruction_similarity_matrix(
+        reconstructions,
+        class_averages,
+        os.path.join(run_dir, 'str_rec_similarity.png')
     )
     
     # Save summary
