@@ -135,17 +135,15 @@ class HebbianNetwork:
             num_connected = sum(1 for is_connected in self.hidden_signific_connections if is_connected)
             
             if num_connected > 0:
-                scale = 1.0 / num_connected  # Normalize across inputs
-                
                 for i, (is_connected, W) in enumerate(zip(self.hidden_signific_connections, self.signific_weights)):
                     if is_connected:
                         # Apply KH's exact activation function with increased power
                         sig = self.xp.sign(W)
                         abs_weights = self.xp.abs(W)**(self.p * self.signific_p_multiplier - 1)
-                        signific_input = scale * self.xp.dot(sig * abs_weights, activations[i+1].T)
+                        signific_input = self.xp.dot(sig * abs_weights, activations[i+1].T)
                         signific_inputs.append(signific_input)
                 
-                # Stack and combine inputs
+                # Stack and combine inputs without scaling
                 h = self.xp.sum(self.xp.stack(signific_inputs, axis=0), axis=0)
             else:
                 h = self.xp.zeros((self.signific_size, x.shape[0]), dtype=x.dtype)
@@ -189,20 +187,33 @@ class HebbianNetwork:
                     sig = self.xp.sign(W)
                     tot_input = self.xp.dot(sig * self.xp.abs(W)**(self.p * self.signific_p_multiplier - 1), hidden_activations.T)
                     
-                    # Learning rule exactly as KH
+                    # Learning rule treating digit-color pairs as atomic units
                     yl = self.xp.zeros_like(tot_input)
                     
-                    # Vectorized winners/losers computation
-                    target_indices = self.xp.argmax(signific_pattern, axis=1)
-                    batch_indices = self.xp.arange(x.shape[0])
-                    yl[target_indices, batch_indices] = 1.0  # Hebbian for targets
+                    # Split signific pattern into components (digit and color)
+                    n_digits = 10  # First 10 positions are digits
+                    digit_pattern = signific_pattern[:, :n_digits]
+                    color_pattern = signific_pattern[:, n_digits:]
                     
-                    # Find k-th highest non-target for each batch
+                    # Get target indices for each component
+                    digit_targets = self.xp.argmax(digit_pattern, axis=1)
+                    color_targets = self.xp.argmax(color_pattern, axis=1) + n_digits
+                    batch_indices = self.xp.arange(x.shape[0])
+                    
+                    # Single Hebbian update for the digit-color pair
+                    yl[digit_targets, batch_indices] = 0.5  # Split +1.0 between digit and color
+                    yl[color_targets, batch_indices] = 0.5
+                    
+                    # Anti-Hebbian updates treating digit-color as a unit
+                    # Create mask for all positions except the target digit-color pair
                     mask = self.xp.ones_like(tot_input, dtype=bool)
-                    mask[target_indices, batch_indices] = False
-                    masked_inputs = self.xp.where(mask, tot_input, -self.xp.inf)
-                    non_target_indices = self.xp.argsort(masked_inputs, axis=0)[-self.k]
-                    yl[non_target_indices, batch_indices] = -self.delta  # Anti-Hebbian for competitors
+                    mask[digit_targets, batch_indices] = False
+                    mask[color_targets, batch_indices] = False
+                    
+                    # Find k strongest competitors among all positions
+                    inputs = self.xp.where(mask, tot_input, -self.xp.inf)
+                    competitors = self.xp.argsort(inputs, axis=0)[-self.k:]
+                    yl[competitors, batch_indices] = -self.delta / self.k  # Distribute delta across k competitors
                     
                     # Update weights exactly as KH
                     xx = self.xp.sum(yl * tot_input, axis=1)
@@ -217,25 +228,34 @@ class HebbianNetwork:
                     W /= norms[:, None]
     
     def rts_classify(self, x, component_sizes):
-        """Classify inputs using RtS pathway."""
+        """Classify inputs using RtS pathway with separate handling for digits and colors."""
         if self.signific_weights is None:
             raise ValueError("Network does not have signific pathway")
             
-        # Get signific activations using KH's activation function
+        # Get signific activations
         signific_activations = self.forward(x)
         
-        # Classify each component using same activation as training
-        classifications = []
-        start_idx = 0
-        for size in component_sizes:
-            component_activations = signific_activations[start_idx:start_idx + size]
-            # Use same increased power as in forward pass
-            sig = self.xp.sign(component_activations)
-            act = sig * self.xp.abs(component_activations)**(self.p * self.signific_p_multiplier - 1)
-            classifications.append(self.xp.argmax(act, axis=0))
-            start_idx += size
-            
-        return classifications
+        # Split activations into digit and color components
+        n_digits = 10  # First 10 positions are digits
+        digit_activations = signific_activations[:n_digits]
+        color_activations = signific_activations[n_digits:]
+        
+        # Apply nonlinearity with same power for both
+        power = self.p * self.signific_p_multiplier - 1
+        
+        # Process digits
+        sig_digits = self.xp.sign(digit_activations)
+        act_digits = sig_digits * self.xp.abs(digit_activations)**power
+        act_digits = act_digits / (self.xp.sum(self.xp.abs(act_digits), axis=0, keepdims=True) + 1e-8)
+        digit_classes = self.xp.argmax(act_digits, axis=0)
+        
+        # Process colors
+        sig_colors = self.xp.sign(color_activations)
+        act_colors = sig_colors * self.xp.abs(color_activations)**power
+        act_colors = act_colors / (self.xp.sum(self.xp.abs(act_colors), axis=0, keepdims=True) + 1e-8)
+        color_classes = self.xp.argmax(act_colors, axis=0)
+        
+        return [digit_classes, color_classes]
     
     def to_device(self, device):
         """Move network to specified device."""
@@ -266,8 +286,28 @@ class HebbianNetwork:
             for i, (is_connected, W) in enumerate(zip(self.hidden_signific_connections, self.signific_weights)):
                 if is_connected:
                     sig = self.xp.sign(W)
-                    # Use increased power for signific weights
-                    act = self.xp.dot(x, sig * self.xp.abs(W)**(self.p * self.signific_p_multiplier - 1))
+                    # Split signific input into digit and color components
+                    n_digits = 10
+                    digit_input = x[:, :n_digits]
+                    color_input = x[:, n_digits:]
+                    
+                    # Project each component separately with increased power
+                    W_digits = W[:n_digits]
+                    W_colors = W[n_digits:]
+                    
+                    # Use increased power for both components
+                    power = self.p * self.signific_p_multiplier - 1
+                    
+                    # Project digits
+                    sig_digits = self.xp.sign(W_digits)
+                    act_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
+                    
+                    # Project colors
+                    sig_colors = self.xp.sign(W_colors)
+                    act_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
+                    
+                    # Combine activations (sum since they target same hidden units)
+                    act = act_digits + act_colors
                     activations.append(act)
             return activations
         else:
@@ -280,34 +320,80 @@ class HebbianNetwork:
                     activations.append(h)
             return activations
 
-    def str_rec(self, signific_input, max_iter=500, init_lr=5.0, tol=1e-5, patience=10, min_steps=50):
-        """Reconstruct input from signific input using either direct weight reversal or gradient descent."""
+    def str_rec(self, signific_input, max_iter=500, init_lr=5.0, tol=1e-5, patience=10, min_steps=50, component_sizes=None):
+        """Reconstruct input from signific input using either direct weight reversal or gradient descent.
+        
+        Args:
+            signific_input: Input to signific pathway
+            max_iter: Maximum iterations for gradient descent
+            init_lr: Initial learning rate
+            tol: Tolerance for improvement in loss
+            patience: Number of iterations without improvement before early stopping
+            min_steps: Minimum number of steps before early stopping
+            component_sizes: List of sizes for each component (e.g. [10, 3] for digits and colors)
+                           If provided, optimizes each component separately
+        """
         # First compute target activations from signific input
         target_acts = self._get_hidden_activations(signific_input, is_signific=True)
         
         # For single hidden layer, use direct weight reversal
         if len(self.layers) == 1 and len(self.signific_weights) == 1:
-            print("\nUsing direct weight reversal for single hidden layer...")
-            
             # Step 1: Project signific input to hidden layer using signific weights with increased power
             W_sig = self.signific_weights[0]  # Shape: (signific_size, hidden_size)
-            sig = self.xp.sign(W_sig)
-            W_sig_nonlinear = sig * self.xp.abs(W_sig)**(self.p * self.signific_p_multiplier - 1)
-            hidden = self.xp.dot(signific_input, W_sig_nonlinear)  # Shape: (batch, hidden_size)
+            
+            # Split signific input and weights into digit and color components
+            n_digits = 10
+            digit_input = signific_input[:, :n_digits]
+            color_input = signific_input[:, n_digits:]
+            W_digits = W_sig[:n_digits]
+            W_colors = W_sig[n_digits:]
+            
+            # Get number of colors from signific input size
+            n_colors = color_input.shape[1]
+            
+            # Project each component separately with increased power
+            power = self.p * self.signific_p_multiplier - 1
+            
+            # Project digits to get digit-specific hidden activations
+            sig_digits = self.xp.sign(W_digits)
+            hidden_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
+            
+            # Project colors to get color-specific hidden activations
+            sig_colors = self.xp.sign(W_colors)
+            hidden_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
             
             # Step 2: Project hidden activations back to input using referential weights
             W_ref = self.layers[0].W  # Shape: (hidden_size, input_size)
             sig = self.xp.sign(W_ref)
             W_ref_nonlinear = sig * self.xp.abs(W_ref)**(self.p - 1)
-            x = self.xp.dot(hidden, W_ref_nonlinear)  # Shape: (batch, input_size)
             
-            # Normalize the entire image to [0,1] range
-            x = x - self.xp.min(x, axis=1, keepdims=True)
-            x = x / (self.xp.max(x, axis=1, keepdims=True) + 1e-8)
+            # First reconstruct the digit pattern using digit hidden activations
+            x_digits = self.xp.dot(hidden_digits, W_ref_nonlinear[:, :784])  # Only project to intensity channel
+            
+            # Normalize digit pattern
+            x_digits = x_digits - self.xp.min(x_digits, axis=1, keepdims=True)
+            x_digits = x_digits / (self.xp.max(x_digits, axis=1, keepdims=True) + 1e-8)
+            
+            # Initialize output with zeros
+            x = self.xp.zeros((signific_input.shape[0], 784 * (1 + n_colors)), dtype=x_digits.dtype)
+            
+            # Copy normalized digit pattern to intensity channel
+            x[:, :784] = x_digits
+            
+            # Get color weights
+            color_weights = self.xp.abs(color_input)  # Shape: (batch, n_colors)
+            
+            # For each color channel, copy the digit pattern scaled by color weight
+            for c in range(n_colors):
+                if color_weights[0, c] > 0:  # If this color is active
+                    start_idx = 784 * (c + 1)
+                    end_idx = start_idx + 784
+                    x[:, start_idx:end_idx] = x_digits * float(color_weights[0, c])
+            
             return x
         
-        # For multiple hidden layers, optimize referential input to match hidden representations
-        print("\nUsing gradient descent for multiple hidden layers...")
+        # For multiple hidden layers or compositional inputs, optimize referential input
+        print("\nUsing gradient descent for reconstruction...")
         target_vector = self.xp.concatenate([act.flatten() for act in target_acts])
         
         # Initialize with random values in [0, 1]
@@ -317,6 +403,16 @@ class HebbianNetwork:
         no_improvement = 0
         momentum = self.xp.zeros_like(x)
         beta = 0.9  # Momentum coefficient
+        
+        # If using component-wise optimization, get component masks
+        if component_sizes is not None:
+            start_idx = 0
+            component_masks = []
+            for size in component_sizes:
+                mask = self.xp.zeros(self.signific_size, dtype=bool)
+                mask[start_idx:start_idx + size] = True
+                component_masks.append(mask)
+                start_idx += size
         
         print(f"Optimizing reconstruction:")
         for i in range(max_iter):
@@ -328,8 +424,19 @@ class HebbianNetwork:
             current_acts = self._get_hidden_activations(x, is_signific=False)
             current_vector = self.xp.concatenate([act.flatten() for act in current_acts])
             
-            # Compute loss using cosine similarity
-            loss = 1 - float(cosine_similarity([current_vector], [target_vector], xp=self.xp))
+            # Compute loss - either overall or component-wise
+            if component_sizes is None:
+                # Overall cosine similarity
+                loss = 1 - float(cosine_similarity([current_vector], [target_vector], xp=self.xp))
+            else:
+                # Component-wise loss
+                loss = 0
+                for mask in component_masks:
+                    # Get masked vectors for this component
+                    current_comp = current_vector[mask]
+                    target_comp = target_vector[mask]
+                    loss += 1 - float(cosine_similarity([current_comp], [target_comp], xp=self.xp))
+                loss /= len(component_masks)  # Average across components
             
             # Update best solution
             if loss < best_loss - tol:
@@ -354,7 +461,15 @@ class HebbianNetwork:
             perturbed_vector = self.xp.concatenate([act.flatten() for act in perturbed_acts])
             
             # Compute perturbed loss
-            perturbed_loss = 1 - float(cosine_similarity([perturbed_vector], [target_vector], xp=self.xp))
+            if component_sizes is None:
+                perturbed_loss = 1 - float(cosine_similarity([perturbed_vector], [target_vector], xp=self.xp))
+            else:
+                perturbed_loss = 0
+                for mask in component_masks:
+                    perturbed_comp = perturbed_vector[mask]
+                    target_comp = target_vector[mask]
+                    perturbed_loss += 1 - float(cosine_similarity([perturbed_comp], [target_comp], xp=self.xp))
+                perturbed_loss /= len(component_masks)
             
             # Compute gradient
             grad = (perturbed_loss - loss) / eps * perturbations

@@ -20,6 +20,66 @@ plt.rcParams.update({
     'figure.titlesize': 16      # Overall figure title size
 })
 
+# Define RGB values for each color
+COLORS = {
+    2: np.array([  # RGB values for 2 colors (easy difficulty)
+        [1.0, 0.0, 0.0],  # Red
+        [0.0, 0.0, 1.0],  # Blue
+    ]),
+    3: np.array([  # RGB values for 3 colors
+        [1.0, 0.0, 0.0],  # Red
+        [0.0, 0.0, 1.0],  # Blue
+        [0.0, 0.8, 0.0],  # Green
+    ]),
+    5: np.array([  # RGB values for 5 colors
+        [1.0, 0.0, 0.0],  # Red
+        [0.0, 0.0, 1.0],  # Blue
+        [0.0, 0.8, 0.0],  # Green
+        [0.8, 0.0, 0.8],  # Purple
+        [1.0, 0.6, 0.0],  # Orange
+    ])
+}
+
+def multichannel_to_rgb(data, n_colors):
+    """Convert multi-channel representation to RGB image.
+    
+    Args:
+        data: Array of shape (784 * (1 + n_colors),) or (batch_size, 784 * (1 + n_colors))
+        n_colors: Number of colors used in the dataset
+        
+    Returns:
+        Array of shape (28, 28, 3) or (batch_size, 28, 28, 3) containing RGB values
+    """
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    
+    batch_size = data.shape[0]
+    xp = cp if isinstance(data, cp.ndarray) else np
+    colors = to_device(COLORS[n_colors], data.device if hasattr(data, 'device') else 'cpu')
+    
+    # Extract intensity and color channels
+    intensity = data[:, :784].reshape(batch_size, 28, 28)
+    color_channels = [
+        data[:, (784 * (i + 1)):(784 * (i + 2))].reshape(batch_size, 28, 28)
+        for i in range(n_colors)
+    ]
+    
+    # Initialize RGB output
+    rgb = xp.zeros((batch_size, 28, 28, 3))
+    
+    # Combine channels using color mapping
+    for i, color_channel in enumerate(color_channels):
+        for j in range(3):  # RGB channels
+            rgb[:, :, :, j] += color_channel * colors[i, j]
+    
+    # Scale by intensity
+    rgb = rgb * intensity.reshape(batch_size, 28, 28, 1)
+    
+    # Ensure values are in [0, 1]
+    rgb = xp.clip(rgb, 0, 1)
+    
+    return rgb[0] if data.shape[0] == 1 else rgb
+
 def to_device(x, device='gpu'):
     """Move data to specified device."""
     if not HAS_CUDA or device == 'cpu':
@@ -66,48 +126,89 @@ def get_minibatch(data, labels, batch_size):
     indices = xp.random.permutation(len(data))[:batch_size]
     return data[indices], labels[indices]
 
-def visualize_weights(W, save_path=None):
-    """Visualize learned receptive fields."""
-    if HAS_CUDA and isinstance(W, cp.ndarray):
+def visualize_weights(net):
+    """Visualize network weights.
+    
+    Args:
+        net: HebbianNetwork instance
+        
+    Returns:
+        matplotlib figure
+    """
+    # Get first layer weights
+    W = net.layers[0].W
+    if HAS_CUDA:
         W = W.get()
     
-    # Get dimensions
-    n_units = W.shape[0]
-    Kx = min(10, int(np.sqrt(n_units)))
-    Ky = min(10, int(np.ceil(n_units / Kx)))
+    n_units = W.shape[0]  # Number of hidden units
+    n_cols = min(10, n_units)
+    n_rows = (n_units + n_cols - 1) // n_cols
     
-    # Create receptive field grid
-    HM = np.zeros((28*Ky, 28*Kx))
-    yy = 0
-    for y in range(Ky):
-        for x in range(Kx):
-            if yy < n_units:
-                HM[y*28:(y+1)*28, x*28:(x+1)*28] = W[yy].reshape(28, 28)
-            yy += 1
+    # Determine if this is colored MNIST based on input size
+    input_size = W.shape[1]
+    is_colored = input_size > 784
+    n_colors = (input_size // 784) - 1 if is_colored else 0
     
-    # Create figure with specific size for publication
-    plt.figure(figsize=(8, 8))
-    nc = np.amax(np.abs(HM))
-    plt.imshow(HM, cmap='bwr', vmin=-nc, vmax=nc)
-    cbar = plt.colorbar(ticks=[np.amin(HM), 0, np.amax(HM)])
-    cbar.ax.set_ylabel('Weight Magnitude', rotation=270, labelpad=15)
-    plt.title('Learned Receptive Fields')
-    plt.axis('off')
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 2*n_rows))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
     
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+    # Plot each unit's weights
+    for i in range(n_units):
+        row, col = i // n_cols, i % n_cols
+        if is_colored:
+            # For colored MNIST, show RGB visualization
+            intensity = W[i, :784].reshape(28, 28)
+            color_channels = [
+                W[i, (784 * (c + 1)):(784 * (c + 2))].reshape(28, 28)
+                for c in range(n_colors)
+            ]
+            
+            # Create RGB image
+            rgb = np.zeros((28, 28, 3))
+            colors = COLORS[n_colors]
+            for c, channel in enumerate(color_channels):
+                for j in range(3):  # RGB channels
+                    rgb[:, :, j] += channel * colors[c, j]
+            
+            # Scale by intensity
+            rgb = rgb * intensity.reshape(28, 28, 1)
+            
+            # Ensure values are in reasonable range
+            rgb = np.clip(rgb, -0.5, 0.5)
+            
+            # Plot
+            axes[row, col].imshow(rgb + 0.5)  # Shift to [0, 1] range
+        else:
+            # For regular MNIST, show grayscale
+            weights = W[i].reshape(28, 28)
+            axes[row, col].imshow(weights, cmap='RdBu_r', vmin=-0.5, vmax=0.5)
+        axes[row, col].axis('off')
+    
+    # Hide empty subplots
+    for i in range(n_units, n_rows * n_cols):
+        row, col = i // n_cols, i % n_cols
+        axes[row, col].axis('off')
+    
+    plt.suptitle('Hidden Unit Weights')
+    plt.tight_layout()
+    return fig
 
 def cosine_similarity(v1, v2, xp=np):
     """Compute cosine similarity between two lists of activation vectors."""
-    similarities = []
-    for a1, a2 in zip(v1, v2):
-        norm1 = xp.linalg.norm(a1)
-        norm2 = xp.linalg.norm(a2)
-        similarities.append(xp.sum(a1 * a2) / (norm1 * norm2))
-    return xp.mean(xp.array(similarities))
+    # Stack inputs if they're lists
+    if isinstance(v1, list):
+        v1 = xp.stack(v1)
+    if isinstance(v2, list):
+        v2 = xp.stack(v2)
+    
+    # Compute norms
+    norms1 = xp.linalg.norm(v1, axis=1, keepdims=True)
+    norms2 = xp.linalg.norm(v2, axis=1, keepdims=True)
+    
+    # Compute similarities
+    similarities = xp.sum(v1 * v2, axis=1) / (norms1.squeeze() * norms2.squeeze() + 1e-8)
+    return xp.mean(similarities)
 
 def plot_association_matrix(matrix, save_path, title="Association Matrix"):
     """Plot association matrix between signific and referential pathways."""
@@ -150,36 +251,67 @@ def compute_class_averages(data, labels, num_classes, xp=np):
         averages.append(avg)
     return xp.stack(averages)
 
-def plot_reconstructions(reconstructions, class_averages, save_path):
-    """Plot reconstructed MNIST digits from signific inputs."""
+def plot_reconstructions(reconstructions, class_averages, save_path, n_colors=None):
+    """Plot reconstructed MNIST digits from signific inputs.
+    
+    Args:
+        reconstructions: Array of reconstructed inputs
+        class_averages: Array of class average inputs
+        save_path: Path to save the plot
+        n_colors: Number of colors (None for regular MNIST)
+    """
     if HAS_CUDA:
         reconstructions = reconstructions.get()
         class_averages = class_averages.get()
-        
+    
+    # Determine if this is colored MNIST
+    if n_colors is None:
+        # Regular MNIST - reshape to 28x28
+        recon_images = [r.reshape(28, 28) for r in reconstructions]
+        avg_images = [a.reshape(28, 28) for a in class_averages]
+        cmap = 'gray'
+        n_rows = 2  # Just reconstruction and class average rows
+    else:
+        # Colored MNIST - convert to RGB
+        recon_images = [multichannel_to_rgb(r, n_colors) for r in reconstructions]
+        avg_images = [multichannel_to_rgb(a, n_colors) for a in class_averages]
+        cmap = None  # Don't use colormap for RGB images
+        n_rows = 2 * n_colors  # One row per color for both recon and avg
+    
+    n_samples = len(recon_images) // n_colors
+    n_cols = 10  # Always 10 digits
+    
     # Create figure and axes grid
-    fig, axes = plt.subplots(2, 10, figsize=(14, 5))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 2*n_rows))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
     
     # Add overall title
-    plt.suptitle('StR Reconstructions per Class', y=1.0)
+    plt.suptitle('StR Reconstructions', y=1.0)
     
-    # Add row titles with larger font
-    fig.text(0.5, 0.9, 'Reconstruction', ha='center', va='center', fontsize=14)
-    fig.text(0.5, 0.52, 'Class Average', ha='center', va='center', fontsize=14)
-    
-    # Plot reconstructions and class averages
-    for i in range(10):
-        # Reconstruction
-        axes[0, i].imshow(reconstructions[i].reshape(28, 28), cmap='gray', vmin=0, vmax=1)
-        axes[0, i].axis('off')
-        axes[0, i].set_title(str(i))
+    # Plot reconstructions and class averages by color
+    for color in range(n_colors):
+        # Plot reconstructions for this color
+        recon_row = color * 2  # Even rows for reconstructions
+        for digit in range(10):
+            idx = color * 10 + digit
+            if idx < len(recon_images):
+                axes[recon_row, digit].imshow(recon_images[idx], cmap=cmap, vmin=0, vmax=1)
+                axes[recon_row, digit].axis('off')
+                axes[recon_row, digit].set_title(f'd:{digit}')
+        axes[recon_row, 0].set_ylabel(f'Recon\nColor {color}', rotation=0, ha='right', va='center')
         
-        # Class average
-        axes[1, i].imshow(class_averages[i].reshape(28, 28), cmap='gray', vmin=0, vmax=1)
-        axes[1, i].axis('off')
-        axes[1, i].set_title(str(i))
+        # Plot class averages for this color
+        avg_row = color * 2 + 1  # Odd rows for class averages
+        for digit in range(10):
+            idx = color * 10 + digit
+            if idx < len(avg_images):
+                axes[avg_row, digit].imshow(avg_images[idx], cmap=cmap, vmin=0, vmax=1)
+                axes[avg_row, digit].axis('off')
+        axes[avg_row, 0].set_ylabel(f'Avg\nColor {color}', rotation=0, ha='right', va='center')
     
-    # Adjust spacing - slightly increased hspace
-    plt.subplots_adjust(left=0.05, right=0.95, top=0.85, bottom=0.15, wspace=0.1, hspace=0.2)
+    # Adjust spacing
+    plt.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.05, wspace=0.1, hspace=0.2)
     
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -192,6 +324,7 @@ def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False):
     else:
         fmt = 'd'
     
+    n_classes = conf_matrix.shape[0]
     fig = plt.figure(figsize=(8, 7))
     ax = plt.gca()
     
@@ -204,15 +337,15 @@ def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False):
                       rotation=270, labelpad=15)
     
     # Configure axes
-    ax.set_xticks(np.arange(10))
-    ax.set_yticks(np.arange(10))
+    ax.set_xticks(np.arange(n_classes))
+    ax.set_yticks(np.arange(n_classes))
     ax.set_xlabel('Predicted Class')
     ax.set_ylabel('True Class')
     
     # Add counts as text
     thresh = conf_matrix.max() / 2
-    for i in range(10):
-        for j in range(10):
+    for i in range(n_classes):
+        for j in range(n_classes):
             text = ax.text(j, i, format(conf_matrix[i, j], fmt),
                          ha="center", va="center",
                          color="white" if conf_matrix[i, j] > thresh else "black")
@@ -223,19 +356,30 @@ def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_path):
+def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_path, n_colors=None):
     """Plot similarity matrix between reconstructions and class averages using SSIM."""
     if HAS_CUDA:
         reconstructions = reconstructions.get()
         class_averages = class_averages.get()
     
+    # Convert to RGB if colored MNIST
+    if n_colors is not None:
+        recon_images = [multichannel_to_rgb(r, n_colors) for r in reconstructions]
+        avg_images = [multichannel_to_rgb(a, n_colors) for a in class_averages]
+        channel_axis = -1  # RGB channels are in the last dimension
+    else:
+        recon_images = [r.reshape(28, 28) for r in reconstructions]
+        avg_images = [a.reshape(28, 28) for a in class_averages]
+        channel_axis = None  # No color channels
+    
     # Compute similarity matrix using SSIM
-    similarity_matrix = np.zeros((10, 10))
-    for i in range(10):
-        recon_i = reconstructions[i].reshape(28, 28)
-        for j in range(10):
-            avg_j = class_averages[j].reshape(28, 28)
-            similarity_matrix[i, j] = ssim(recon_i, avg_j, data_range=1.0)
+    n_samples = len(recon_images)
+    similarity_matrix = np.zeros((n_samples, n_samples))
+    for i in range(n_samples):
+        recon_i = recon_images[i]
+        for j in range(n_samples):
+            avg_j = avg_images[j]
+            similarity_matrix[i, j] = ssim(recon_i, avg_j, data_range=1.0, channel_axis=channel_axis)
     
     # Plot matrix
     fig = plt.figure(figsize=(8, 7))
@@ -247,19 +391,54 @@ def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_
     cbar.ax.set_ylabel('SSIM', rotation=270, labelpad=15)
     
     # Configure axes
-    ax.set_xticks(np.arange(10))
-    ax.set_yticks(np.arange(10))
+    ax.set_xticks(np.arange(n_samples))
+    ax.set_yticks(np.arange(n_samples))
     ax.set_xlabel('Class Average')
     ax.set_ylabel('Reconstruction')
     
     # Add similarity values
-    for i in range(10):
-        for j in range(10):
+    for i in range(n_samples):
+        for j in range(n_samples):
             text = ax.text(j, i, f"{similarity_matrix[i, j]:.2f}",
-                         ha="center", va="center", 
+                         ha="center", va="center",
                          color="black" if abs(similarity_matrix[i, j]) < 0.5 else "white",
                          fontsize=8)
     
-    plt.title('StR Reconstruction Similarity')
+    plt.title("StR-rec Similarity Matrix")
+    plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close() 
+    plt.close()
+
+def compute_confusion_matrix(true_labels, pred_labels, n_classes=None):
+    """Compute confusion matrix between true and predicted labels.
+    
+    Args:
+        true_labels: Array of true labels
+        pred_labels: Array of predicted labels
+        n_classes: Number of classes. If None, inferred from labels.
+        
+    Returns:
+        confusion_matrix: Array of shape (n_classes, n_classes)
+    """
+    # Move to CPU if needed
+    if HAS_CUDA:
+        if isinstance(true_labels, cp.ndarray):
+            true_labels = true_labels.get()
+        if isinstance(pred_labels, cp.ndarray):
+            pred_labels = pred_labels.get()
+    
+    # Convert to integer labels
+    true_labels = true_labels.astype(int)
+    pred_labels = pred_labels.astype(int)
+    
+    if n_classes is None:
+        n_classes = max(np.max(true_labels), np.max(pred_labels)) + 1
+    
+    # Initialize confusion matrix
+    confusion_matrix = np.zeros((n_classes, n_classes), dtype=int)
+    
+    # Fill confusion matrix
+    for t, p in zip(true_labels, pred_labels):
+        confusion_matrix[t, p] += 1
+    
+    return confusion_matrix 
