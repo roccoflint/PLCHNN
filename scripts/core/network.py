@@ -321,18 +321,7 @@ class HebbianNetwork:
             return activations
 
     def str_rec(self, signific_input, max_iter=500, init_lr=5.0, tol=1e-5, patience=10, min_steps=50, component_sizes=None):
-        """Reconstruct input from signific input using either direct weight reversal or gradient descent.
-        
-        Args:
-            signific_input: Input to signific pathway
-            max_iter: Maximum iterations for gradient descent
-            init_lr: Initial learning rate
-            tol: Tolerance for improvement in loss
-            patience: Number of iterations without improvement before early stopping
-            min_steps: Minimum number of steps before early stopping
-            component_sizes: List of sizes for each component (e.g. [10, 3] for digits and colors)
-                           If provided, optimizes each component separately
-        """
+        """Reconstruct input from signific input using either direct weight reversal or gradient descent."""
         # First compute target activations from signific input
         target_acts = self._get_hidden_activations(signific_input, is_signific=True)
         
@@ -362,33 +351,53 @@ class HebbianNetwork:
             sig_colors = self.xp.sign(W_colors)
             hidden_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
             
+            # Combine hidden activations
+            hidden = hidden_digits + hidden_colors
+            
             # Step 2: Project hidden activations back to input using referential weights
             W_ref = self.layers[0].W  # Shape: (hidden_size, input_size)
             sig = self.xp.sign(W_ref)
-            W_ref_nonlinear = sig * self.xp.abs(W_ref)**(self.p - 1)
             
-            # First reconstruct the digit pattern using digit hidden activations
-            x_digits = self.xp.dot(hidden_digits, W_ref_nonlinear[:, :784])  # Only project to intensity channel
+            # Split referential weights into intensity and color channels
+            W_intensity = W_ref[:, :784]  # Weights for intensity channel
+            W_colors = [W_ref[:, 784*(i+1):784*(i+2)] for i in range(n_colors)]  # Weights for each color channel
             
-            # Normalize digit pattern
-            x_digits = x_digits - self.xp.min(x_digits, axis=1, keepdims=True)
-            x_digits = x_digits / (self.xp.max(x_digits, axis=1, keepdims=True) + 1e-8)
+            # First reconstruct the intensity pattern
+            sig_intensity = self.xp.sign(W_intensity)
+            W_intensity_nonlinear = sig_intensity * self.xp.abs(W_intensity)**(self.p - 1)
+            x_intensity = self.xp.dot(hidden, W_intensity_nonlinear)
+            
+            # Normalize intensity pattern
+            x_intensity = x_intensity - self.xp.min(x_intensity, axis=1, keepdims=True)
+            x_intensity = x_intensity / (self.xp.max(x_intensity, axis=1, keepdims=True) + 1e-8)
             
             # Initialize output with zeros
-            x = self.xp.zeros((signific_input.shape[0], 784 * (1 + n_colors)), dtype=x_digits.dtype)
+            x = self.xp.zeros((signific_input.shape[0], 784 * (1 + n_colors)), dtype=x_intensity.dtype)
             
-            # Copy normalized digit pattern to intensity channel
-            x[:, :784] = x_digits
+            # Copy normalized intensity pattern to intensity channel
+            x[:, :784] = x_intensity
             
-            # Get color weights
+            # Get color weights from signific input
             color_weights = self.xp.abs(color_input)  # Shape: (batch, n_colors)
             
-            # For each color channel, copy the digit pattern scaled by color weight
+            # For each color channel, reconstruct using color-specific weights
             for c in range(n_colors):
                 if color_weights[0, c] > 0:  # If this color is active
+                    # Get color-specific weights
+                    sig_color = self.xp.sign(W_colors[c])
+                    W_color_nonlinear = sig_color * self.xp.abs(W_colors[c])**(self.p - 1)
+                    
+                    # Project to color channel
+                    x_color = self.xp.dot(hidden, W_color_nonlinear)
+                    
+                    # Normalize color pattern
+                    x_color = x_color - self.xp.min(x_color, axis=1, keepdims=True)
+                    x_color = x_color / (self.xp.max(x_color, axis=1, keepdims=True) + 1e-8)
+                    
+                    # Scale by color weight and copy to appropriate channel
                     start_idx = 784 * (c + 1)
                     end_idx = start_idx + 784
-                    x[:, start_idx:end_idx] = x_digits * float(color_weights[0, c])
+                    x[:, start_idx:end_idx] = x_color * float(color_weights[0, c])
             
             return x
         

@@ -1,0 +1,17 @@
+Configuration:
+n_colors: 2
+hidden_size: 400
+batch_size: 100
+n_epochs: 20
+learning_rate: 0.02
+p: 2.0
+delta: 0.4
+k: 2
+allow_pathway_interaction: False
+ood_ratio: 0.2
+
+OOD Pairs:
+(digit: 7, color: 0)
+(digit: 6, color: 0)
+(digit: 5, color: 1)
+(digit: 6, color: 1)
