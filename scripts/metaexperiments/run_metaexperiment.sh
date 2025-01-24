@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Remote configuration
-REMOTE_HOST="root@63.141.33.33"
-REMOTE_PORT="22045"
+REMOTE_HOST="root@69.30.85.115"
+REMOTE_PORT="22054"
 SSH_KEY="~/.ssh/id_ed25519"
 REMOTE_DIR="/root/PCHNN"
 LOCAL_DIR="/Users/georgeflint/Desktop/research/projects/Hebbian Language/PCHNN"
@@ -17,9 +17,10 @@ ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "mkdir -p $REMOTE_DIR/results"
 
 # Sync code to remote
 echo "Syncing code to remote..."
-rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
+rsync -az -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
     --exclude "results" \
     --exclude "__pycache__" \
+    --exclude ".git" \
     "$LOCAL_DIR/" \
     "$REMOTE_HOST:$REMOTE_DIR/"
 
@@ -32,12 +33,12 @@ echo "Checking available GPUs on remote..."
 N_GPUS=$(ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l")
 echo "Found $N_GPUS GPUs on remote"
 
-# Run experiment with all passed arguments
+# Run experiment
 echo "Running experiment with parameters: $@"
-ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "cd $REMOTE_DIR && python3 scripts/experiments/colored_mnist.py $@"
+python3 scripts/experiments/colored_mnist.py $@
 
 # Sync results back
 echo "Syncing results back..."
-rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
+rsync -az -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
     "$REMOTE_HOST:$REMOTE_DIR/results/" \
     "$LOCAL_DIR/results/" 

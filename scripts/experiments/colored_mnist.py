@@ -15,7 +15,7 @@ from core.utils import (
     load_mnist, compute_confusion_matrix, plot_confusion_matrix,
     plot_association_matrix, plot_reconstructions,
     plot_reconstruction_similarity_matrix, cosine_similarity,
-    visualize_weights, multichannel_to_rgb, COLORS, COLOR_LABELS
+    visualize_weights, multichannel_to_rgb, COLORS, COLOR_LABELS, ColoredMNIST
 )
 import scipy.io
 from tqdm import tqdm, trange
@@ -154,6 +154,9 @@ def generate_colored_mnist(n_colors=3, device='cpu', include_signific=True, hold
     Returns:
         tuple: (train_data, train_labels, test_data, test_labels, holdout_pairs)
     """
+    # Initialize ColoredMNIST handler
+    mnist = ColoredMNIST(n_colors, device)
+    
     # Load MNIST data
     mnist_data, mnist_labels, mnist_test_data, mnist_test_labels = load_mnist()
     xp = cp if device == 'gpu' and HAS_CUDA else np
@@ -178,7 +181,7 @@ def generate_colored_mnist(n_colors=3, device='cpu', include_signific=True, hold
         # Sort by digit then color for consistent order
         holdout_pairs.sort(key=lambda x: (x[0], x[1]), reverse=True)  # Sort descending by digit
     
-    print(f"Holding out {len(holdout_pairs)} combinations: {', '.join([f'{COLOR_LABELS[c]}{d}' for d, c in holdout_pairs])}")
+    print(f"Holding out {len(holdout_pairs)} combinations: {', '.join([mnist.get_label(d, c) for d, c in holdout_pairs])}")
     
     def colorize_data(data, labels, is_training=True):
         n_samples = len(data)
@@ -598,32 +601,62 @@ def train_hebbian_colored_mnist(
         test_color_preds * 10 + test_digit_preds
     )
     
+    # Create masks for ID and OOD samples
+    test_comp_labels = test_labels_cpu[:, 1] * 10 + test_labels_cpu[:, 0]
+    test_comp_preds = test_color_preds * 10 + test_digit_preds
+    
+    # Get OOD samples
+    ood_mask = np.zeros(len(test_comp_labels), dtype=bool)
+    for i in range(len(test_comp_labels)):
+        if test_comp_labels[i] in ood_indices:
+            ood_mask[i] = True
+    
+    # Get ID samples
+    id_mask = ~ood_mask
+    
+    # Compute separate confusion matrices for ID and OOD
+    test_comp_conf_rts_ood = compute_confusion_matrix(
+        test_comp_labels[ood_mask],
+        test_comp_preds[ood_mask]
+    )
+    test_comp_conf_rts_id = compute_confusion_matrix(
+        test_comp_labels[id_mask],
+        test_comp_preds[id_mask]
+    )
+    
     # Save confusion matrices
-    plot_confusion_matrix(train_digit_conf_decoder, os.path.join(run_dir, 'train_confusion_digit_decoder.png'),
+    plot_confusion_matrix(train_digit_conf_decoder, os.path.join(run_dir, 'decoder_confusion_digit_train.png'),
                          title='Training Confusion Matrix (Decoder, Digits)', normalize=True)
-    plot_confusion_matrix(train_color_conf_decoder, os.path.join(run_dir, 'train_confusion_color_decoder.png'),
+    plot_confusion_matrix(train_color_conf_decoder, os.path.join(run_dir, 'decoder_confusion_color_train.png'),
                          title='Training Confusion Matrix (Decoder, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-    plot_confusion_matrix(test_digit_conf_decoder, os.path.join(run_dir, 'test_confusion_digit_decoder.png'),
+    plot_confusion_matrix(test_digit_conf_decoder, os.path.join(run_dir, 'decoder_confusion_digit_test.png'),
                          title='Test Confusion Matrix (Decoder, Digits)', normalize=True)
-    plot_confusion_matrix(test_color_conf_decoder, os.path.join(run_dir, 'test_confusion_color_decoder.png'),
+    plot_confusion_matrix(test_color_conf_decoder, os.path.join(run_dir, 'decoder_confusion_color_test.png'),
                          title='Test Confusion Matrix (Decoder, Colors)', normalize=True, is_color=True, n_colors=n_colors)
     
-    plot_confusion_matrix(train_digit_conf_rts, os.path.join(run_dir, 'train_confusion_digit_rts.png'),
+    plot_confusion_matrix(train_digit_conf_rts, os.path.join(run_dir, 'rts_confusion_digit_train.png'),
                          title='Training Confusion Matrix (RtS, Digits)', normalize=True)
-    plot_confusion_matrix(train_color_conf_rts, os.path.join(run_dir, 'train_confusion_color_rts.png'),
+    plot_confusion_matrix(train_color_conf_rts, os.path.join(run_dir, 'rts_confusion_color_train.png'),
                          title='Training Confusion Matrix (RtS, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-    plot_confusion_matrix(test_digit_conf_rts, os.path.join(run_dir, 'test_confusion_digit_rts.png'),
+    plot_confusion_matrix(test_digit_conf_rts, os.path.join(run_dir, 'rts_confusion_digit_test.png'),
                          title='Test Confusion Matrix (RtS, Digits)', normalize=True)
-    plot_confusion_matrix(test_color_conf_rts, os.path.join(run_dir, 'test_confusion_color_rts.png'),
+    plot_confusion_matrix(test_color_conf_rts, os.path.join(run_dir, 'rts_confusion_color_test.png'),
                          title='Test Confusion Matrix (RtS, Colors)', normalize=True, is_color=True, n_colors=n_colors)
     
-    # Plot compositional confusion matrices for RtS
-    plot_confusion_matrix(train_comp_conf_rts, os.path.join(run_dir, 'train_confusion_compositional_rts.png'),
-                         title='Training Confusion Matrix (RtS, Compositional)', normalize=True, 
-                         is_compositional=True, n_colors=n_colors, ood_indices=ood_indices)
-    plot_confusion_matrix(test_comp_conf_rts, os.path.join(run_dir, 'test_confusion_compositional_rts.png'),
-                         title='Test Confusion Matrix (RtS, Compositional)', normalize=True,
-                         is_compositional=True, n_colors=n_colors, ood_indices=ood_indices)
+    # Plot compositional confusion matrices
+    train_indices = np.arange(n_colors * 10)
+    plot_confusion_matrix(train_comp_conf_rts, os.path.join(run_dir, 'rts_confusion_compositional_train.png'),
+                         title='Training Confusion Matrix (RtS, Compositional)', normalize=True, is_compositional=True,
+                         n_colors=n_colors, train_indices=train_indices)
+    plot_confusion_matrix(test_comp_conf_rts, os.path.join(run_dir, 'rts_confusion_compositional_test.png'),
+                         title='Test Confusion Matrix (RtS, Compositional)', normalize=True, is_compositional=True,
+                         n_colors=n_colors, train_indices=train_indices)
+    plot_confusion_matrix(test_comp_conf_rts_ood, os.path.join(run_dir, 'rts_confusion_compositional_test_ood.png'),
+                         title='Test Confusion Matrix (RtS, OOD Compositions Only)', normalize=True,
+                         is_compositional=True, n_colors=n_colors, train_indices=train_indices)
+    plot_confusion_matrix(test_comp_conf_rts_id, os.path.join(run_dir, 'rts_confusion_compositional_test_id.png'),
+                         title='Test Confusion Matrix (RtS, ID Compositions Only)', normalize=True,
+                         is_compositional=True, n_colors=n_colors, train_indices=train_indices)
     
     # Compute class averages for each digit-color combination
     print("\nComputing compositional class averages...")
@@ -653,13 +686,13 @@ def train_hebbian_colored_mnist(
                     class_averages[(digit_j, color_j)].reshape(1, -1)
                 )
     
-    # Plot association matrix
-    fig = plt.figure(figsize=(10, 9))
-    ax = plt.gca()
-    # Convert to NumPy before plotting
-    matrix_to_plot = to_device(association_matrix, 'cpu')
-    plot_association_matrix(matrix_to_plot, os.path.join(run_dir, 'str_rep_association.png'),
-                          title="StR-rep Association Matrix", n_colors=n_colors, ood_indices=ood_indices)
+    # Plot association matrices
+    plot_association_matrix(association_matrix, os.path.join(run_dir, 'str-rep_association_compositional_test.png'),
+                           title='StR-rep Association Matrix', n_colors=n_colors, train_indices=train_indices)
+    plot_association_matrix(association_matrix, os.path.join(run_dir, 'str-rep_association_compositional_test_id.png'),
+                           title='StR-rep Association Matrix - ID Only', n_colors=n_colors, train_indices=train_indices)
+    plot_association_matrix(association_matrix, os.path.join(run_dir, 'str-rep_association_compositional_test_ood.png'),
+                           title='StR-rep Association Matrix - OOD Only', n_colors=n_colors, train_indices=train_indices)
     
     # Compute StR-rec reconstructions
     print("\nComputing StR-rec reconstructions...")
@@ -682,24 +715,22 @@ def train_hebbian_colored_mnist(
     
     # Stack reconstructions
     reconstructions = cp.stack(reconstructions) if HAS_CUDA else np.stack(reconstructions)
-    
+
+    # Convert class_averages to list in same order as reconstructions
+    class_averages_list = []
+    for i in range(n_combinations):
+        digit, color = i % 10, i // 10
+        if (digit, color) in class_averages:
+            class_averages_list.append(class_averages[(digit, color)])
+    class_averages_list = cp.stack(class_averages_list) if HAS_CUDA else np.stack(class_averages_list)
+
     # Plot reconstructions
-    plot_reconstructions(
-        reconstructions,
-        np.stack([class_averages[(d, c)] for d, c in class_averages.keys()]),
-        os.path.join(run_dir, 'str_rec_reconstructions.png'),
-        n_colors=n_colors,
-        ood_indices=ood_indices
-    )
+    plot_reconstructions(reconstructions, class_averages_list, os.path.join(run_dir, 'str_reconstructions.png'),
+                        n_colors=n_colors, train_indices=train_indices)
     
-    # Plot reconstruction similarity matrix
-    plot_reconstruction_similarity_matrix(
-        reconstructions,
-        np.stack([class_averages[(d, c)] for d, c in class_averages.keys()]),
-        os.path.join(run_dir, 'str_rec_similarity.png'),
-        n_colors=n_colors,
-        ood_indices=ood_indices
-    )
+    # Plot reconstruction similarity matrices
+    plot_reconstruction_similarity_matrix(reconstructions, class_averages_list, os.path.join(run_dir, 'str-rec_association_compositional_test.png'),
+                                            n_colors=n_colors, ood_indices=ood_indices)
     
     # Print and save results
     print(f"\nResults:")

@@ -1,0 +1,15 @@
+allow_pathway_interaction: True
+batch_size: 100
+delta: 0.4
+eval_batch_size: 1000
+f: <_io.TextIOWrapper name='results/20250124_014316/config.txt' mode='w' encoding='utf-8'>
+hidden_size: 324
+k: 2
+learning_rate: 0.02
+n_colors: 2
+n_epochs: 30
+p: 2.0
+run_dir: results/20250124_014316
+save_dir: results
+timestamp: 20250124_014316
+train_ratio: 0.8
