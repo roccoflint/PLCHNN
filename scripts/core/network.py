@@ -190,25 +190,32 @@ class HebbianNetwork:
                     # Learning rule treating digit-color pairs as atomic units
                     yl = self.xp.zeros_like(tot_input)
                     
-                    # Split signific pattern into components (digit and color)
+                    # Split signific pattern into components (digit and color if present)
                     n_digits = 10  # First 10 positions are digits
                     digit_pattern = signific_pattern[:, :n_digits]
-                    color_pattern = signific_pattern[:, n_digits:]
+                    has_colors = signific_pattern.shape[1] > n_digits
                     
                     # Get target indices for each component
                     digit_targets = self.xp.argmax(digit_pattern, axis=1)
-                    color_targets = self.xp.argmax(color_pattern, axis=1) + n_digits
                     batch_indices = self.xp.arange(x.shape[0])
                     
-                    # Single Hebbian update for the digit-color pair
-                    yl[digit_targets, batch_indices] = 0.5  # Split +1.0 between digit and color
-                    yl[color_targets, batch_indices] = 0.5
-                    
-                    # Anti-Hebbian updates treating digit-color as a unit
-                    # Create mask for all positions except the target digit-color pair
-                    mask = self.xp.ones_like(tot_input, dtype=bool)
-                    mask[digit_targets, batch_indices] = False
-                    mask[color_targets, batch_indices] = False
+                    if has_colors:
+                        # Handle colored MNIST case
+                        color_pattern = signific_pattern[:, n_digits:]
+                        color_targets = self.xp.argmax(color_pattern, axis=1) + n_digits
+                        # Split +1.0 between digit and color
+                        yl[digit_targets, batch_indices] = 0.5
+                        yl[color_targets, batch_indices] = 0.5
+                        # Create mask for all positions except the target digit-color pair
+                        mask = self.xp.ones_like(tot_input, dtype=bool)
+                        mask[digit_targets, batch_indices] = False
+                        mask[color_targets, batch_indices] = False
+                    else:
+                        # Handle regular MNIST case
+                        yl[digit_targets, batch_indices] = 1.0  # Full +1.0 for digit
+                        # Create mask for all positions except the target digit
+                        mask = self.xp.ones_like(tot_input, dtype=bool)
+                        mask[digit_targets, batch_indices] = False
                     
                     # Find k strongest competitors among all positions
                     inputs = self.xp.where(mask, tot_input, -self.xp.inf)
@@ -235,29 +242,13 @@ class HebbianNetwork:
         # Get signific activations
         signific_activations = self.forward(x)
         
-        # Split activations into digit and color components
+        # Split activations into digit and color components if present
         n_digits = 10  # First 10 positions are digits
-        digit_activations = signific_activations[:n_digits]
-        color_activations = signific_activations[n_digits:]
+        has_colors = signific_activations.shape[0] > n_digits
         
-        # Apply nonlinearity with same power for both
+        # Apply nonlinearity with same power
         power = self.p * self.signific_p_multiplier - 1
         
-<<<<<<< Updated upstream
-        # Process digits
-        sig_digits = self.xp.sign(digit_activations)
-        act_digits = sig_digits * self.xp.abs(digit_activations)**power
-        act_digits = act_digits / (self.xp.sum(self.xp.abs(act_digits), axis=0, keepdims=True) + 1e-8)
-        digit_classes = self.xp.argmax(act_digits, axis=0)
-        
-        # Process colors
-        sig_colors = self.xp.sign(color_activations)
-        act_colors = sig_colors * self.xp.abs(color_activations)**power
-        act_colors = act_colors / (self.xp.sum(self.xp.abs(act_colors), axis=0, keepdims=True) + 1e-8)
-        color_classes = self.xp.argmax(act_colors, axis=0)
-        
-        return [digit_classes, color_classes]
-=======
         # Process all activations at once
         sig = self.xp.sign(signific_activations)
         act = sig * self.xp.abs(signific_activations)**power
@@ -274,7 +265,6 @@ class HebbianNetwork:
             return [digit_classes, color_classes]
         else:
             return [digit_classes]
->>>>>>> Stashed changes
     
     def to_device(self, device):
         """Move network to specified device."""
@@ -305,28 +295,38 @@ class HebbianNetwork:
             for i, (is_connected, W) in enumerate(zip(self.hidden_signific_connections, self.signific_weights)):
                 if is_connected:
                     sig = self.xp.sign(W)
-                    # Split signific input into digit and color components
+                    # Check if we have color components
                     n_digits = 10
-                    digit_input = x[:, :n_digits]
-                    color_input = x[:, n_digits:]
+                    has_colors = x.shape[1] > n_digits
                     
-                    # Project each component separately with increased power
-                    W_digits = W[:n_digits]
-                    W_colors = W[n_digits:]
+                    if has_colors:
+                        # Handle colored MNIST case
+                        digit_input = x[:, :n_digits]
+                        color_input = x[:, n_digits:]
+                        
+                        # Split weights for digits and colors
+                        W_digits = W[:n_digits]
+                        W_colors = W[n_digits:]
+                        
+                        # Use increased power for both components
+                        power = self.p * self.signific_p_multiplier - 1
+                        
+                        # Project digits
+                        sig_digits = self.xp.sign(W_digits)
+                        act_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
+                        
+                        # Project colors
+                        sig_colors = self.xp.sign(W_colors)
+                        act_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
+                        
+                        # Combine activations (sum since they target same hidden units)
+                        act = act_digits + act_colors
+                    else:
+                        # Handle regular MNIST case - project digits only
+                        power = self.p * self.signific_p_multiplier - 1
+                        sig = self.xp.sign(W)
+                        act = self.xp.dot(x, sig * self.xp.abs(W)**power)
                     
-                    # Use increased power for both components
-                    power = self.p * self.signific_p_multiplier - 1
-                    
-                    # Project digits
-                    sig_digits = self.xp.sign(W_digits)
-                    act_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
-                    
-                    # Project colors
-                    sig_colors = self.xp.sign(W_colors)
-                    act_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
-                    
-                    # Combine activations (sum since they target same hidden units)
-                    act = act_digits + act_colors
                     activations.append(act)
             return activations
         else:
@@ -348,87 +348,9 @@ class HebbianNetwork:
         # Project signific input to hidden layer using signific weights with increased power
         W_sig = self.signific_weights[0]  # Shape: (signific_size, hidden_size)
         
-<<<<<<< Updated upstream
-        # For single hidden layer, use direct weight reversal
-        if len(self.layers) == 1 and len(self.signific_weights) == 1:
-            # Step 1: Project signific input to hidden layer using signific weights with increased power
-            W_sig = self.signific_weights[0]  # Shape: (signific_size, hidden_size)
-            
-            # Split signific input and weights into digit and color components
-            n_digits = 10
-            digit_input = signific_input[:, :n_digits]
-            color_input = signific_input[:, n_digits:]
-            W_digits = W_sig[:n_digits]
-            W_colors = W_sig[n_digits:]
-            
-            # Get number of colors from signific input size
-            n_colors = color_input.shape[1]
-            
-            # Project each component separately with increased power
-            power = self.p * self.signific_p_multiplier - 1
-            
-            # Project digits to get digit-specific hidden activations
-            sig_digits = self.xp.sign(W_digits)
-            hidden_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
-            
-            # Project colors to get color-specific hidden activations
-            sig_colors = self.xp.sign(W_colors)
-            hidden_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
-            
-            # Combine hidden activations
-            hidden = hidden_digits + hidden_colors
-            
-            # Step 2: Project hidden activations back to input using referential weights
-            W_ref = self.layers[0].W  # Shape: (hidden_size, input_size)
-            sig = self.xp.sign(W_ref)
-            
-            # Split referential weights into intensity and color channels
-            W_intensity = W_ref[:, :784]  # Weights for intensity channel
-            W_colors = [W_ref[:, 784*(i+1):784*(i+2)] for i in range(n_colors)]  # Weights for each color channel
-            
-            # First reconstruct the intensity pattern
-            sig_intensity = self.xp.sign(W_intensity)
-            W_intensity_nonlinear = sig_intensity * self.xp.abs(W_intensity)**(self.p - 1)
-            x_intensity = self.xp.dot(hidden, W_intensity_nonlinear)
-            
-            # Normalize intensity pattern
-            x_intensity = x_intensity - self.xp.min(x_intensity, axis=1, keepdims=True)
-            x_intensity = x_intensity / (self.xp.max(x_intensity, axis=1, keepdims=True) + 1e-8)
-            
-            # Initialize output with zeros
-            x = self.xp.zeros((signific_input.shape[0], 784 * (1 + n_colors)), dtype=x_intensity.dtype)
-            
-            # Copy normalized intensity pattern to intensity channel
-            x[:, :784] = x_intensity
-            
-            # Get color weights from signific input
-            color_weights = self.xp.abs(color_input)  # Shape: (batch, n_colors)
-            
-            # For each color channel, reconstruct using color-specific weights
-            for c in range(n_colors):
-                if color_weights[0, c] > 0:  # If this color is active
-                    # Get color-specific weights
-                    sig_color = self.xp.sign(W_colors[c])
-                    W_color_nonlinear = sig_color * self.xp.abs(W_colors[c])**(self.p - 1)
-                    
-                    # Project to color channel
-                    x_color = self.xp.dot(hidden, W_color_nonlinear)
-                    
-                    # Normalize color pattern
-                    x_color = x_color - self.xp.min(x_color, axis=1, keepdims=True)
-                    x_color = x_color / (self.xp.max(x_color, axis=1, keepdims=True) + 1e-8)
-                    
-                    # Scale by color weight and copy to appropriate channel
-                    start_idx = 784 * (c + 1)
-                    end_idx = start_idx + 784
-                    x[:, start_idx:end_idx] = x_color * float(color_weights[0, c])
-            
-            return x
-=======
         # Check if we have color components
         n_digits = 10
         has_colors = signific_input.shape[1] > n_digits
->>>>>>> Stashed changes
         
         if has_colors:
             # Handle colored MNIST case

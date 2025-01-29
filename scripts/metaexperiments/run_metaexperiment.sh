@@ -1,54 +1,10 @@
 #!/bin/bash
 
-<<<<<<< Updated upstream
-# Remote configuration
-REMOTE_HOST="root@63.141.33.33"
-REMOTE_PORT="22045"
-=======
 # Set remote connection details
 REMOTE_HOST="194.68.245.28"
 REMOTE_PORT="22079"
->>>>>>> Stashed changes
 SSH_KEY="~/.ssh/id_ed25519"
-REMOTE_DIR="/root/PCHNN"
-LOCAL_DIR="/Users/georgeflint/Desktop/research/projects/Hebbian Language/PCHNN"
 
-<<<<<<< Updated upstream
-# Check and install rsync on remote if needed
-echo "Checking rsync installation on remote..."
-ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "which rsync || (apt-get update && apt-get install -y rsync)"
-
-# Create remote directory structure
-echo "Creating remote directory structure..."
-ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "mkdir -p $REMOTE_DIR/results"
-
-# Sync code to remote
-echo "Syncing code to remote..."
-rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
-    --exclude "results" \
-    --exclude "__pycache__" \
-    "$LOCAL_DIR/" \
-    "$REMOTE_HOST:$REMOTE_DIR/"
-
-# Install Python requirements
-echo "Installing Python requirements on remote..."
-ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "cd $REMOTE_DIR && pip install -r requirements.txt"
-
-# Check GPUs
-echo "Checking available GPUs on remote..."
-N_GPUS=$(ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l")
-echo "Found $N_GPUS GPUs on remote"
-
-# Run experiment with all passed arguments
-echo "Running experiment with parameters: $@"
-ssh $REMOTE_HOST -p $REMOTE_PORT -i $SSH_KEY "cd $REMOTE_DIR && python3 scripts/experiments/colored_mnist.py $@"
-
-# Sync results back
-echo "Syncing results back..."
-rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
-    "$REMOTE_HOST:$REMOTE_DIR/results/" \
-    "$LOCAL_DIR/results/" 
-=======
 # Parse arguments
 CONTINUE_MNIST=""
 CONTINUE_COLORED=""
@@ -447,4 +403,3 @@ fi
 if [ -n "$LATEST_COLORED" ]; then
     echo "- Colored MNIST Optuna: results/$LATEST_COLORED/"
 fi
->>>>>>> Stashed changes

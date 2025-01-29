@@ -15,13 +15,9 @@ from core.utils import (
     load_mnist, compute_confusion_matrix, plot_confusion_matrix,
     plot_reconstructions,
     plot_reconstruction_similarity_matrix, cosine_similarity,
-<<<<<<< Updated upstream
-    visualize_weights, multichannel_to_rgb, COLORS, COLOR_LABELS
-=======
     visualize_weights, multichannel_to_rgb, COLORS, COLOR_LABELS, ColoredMNIST,
     CompositionTracker, compute_class_averages, plot_similarity_matrix,
     save_experiment_metrics, frobenius_norm_from_identity, compute_gmcc
->>>>>>> Stashed changes
 )
 from core.config import NetworkConfig, TrainingConfig
 import scipy.io
@@ -163,6 +159,9 @@ def generate_colored_mnist(n_colors=3, device='cpu', include_signific=True, hold
     Returns:
         tuple: (train_data, train_labels, test_data, test_labels, holdout_pairs)
     """
+    # Initialize ColoredMNIST handler
+    mnist = ColoredMNIST(n_colors, device)
+    
     # Load MNIST data
     mnist_data, mnist_labels, mnist_test_data, mnist_test_labels = load_mnist()
     xp = cp if device == 'gpu' and HAS_CUDA else np
@@ -187,7 +186,7 @@ def generate_colored_mnist(n_colors=3, device='cpu', include_signific=True, hold
         # Sort by digit then color for consistent order
         holdout_pairs.sort(key=lambda x: (x[0], x[1]), reverse=True)  # Sort descending by digit
     
-    print(f"Holding out {len(holdout_pairs)} combinations: {', '.join([f'{COLOR_LABELS[c]}{d}' for d, c in holdout_pairs])}")
+    print(f"Holding out {len(holdout_pairs)} combinations: {', '.join([mnist.get_label(d, c) for d, c in holdout_pairs])}")
     
     def colorize_data(data, labels, is_training=True):
         n_samples = len(data)
@@ -691,26 +690,6 @@ def train_hebbian_colored_mnist(net_config, train_config):
         num_classes=net_config.n_colors * 10
     )
     
-<<<<<<< Updated upstream
-    # Save confusion matrices
-    plot_confusion_matrix(train_digit_conf_decoder, os.path.join(run_dir, 'train_confusion_digit_decoder.png'),
-                         title='Training Confusion Matrix (Decoder, Digits)', normalize=True)
-    plot_confusion_matrix(train_color_conf_decoder, os.path.join(run_dir, 'train_confusion_color_decoder.png'),
-                         title='Training Confusion Matrix (Decoder, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-    plot_confusion_matrix(test_digit_conf_decoder, os.path.join(run_dir, 'test_confusion_digit_decoder.png'),
-                         title='Test Confusion Matrix (Decoder, Digits)', normalize=True)
-    plot_confusion_matrix(test_color_conf_decoder, os.path.join(run_dir, 'test_confusion_color_decoder.png'),
-                         title='Test Confusion Matrix (Decoder, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-    
-    plot_confusion_matrix(train_digit_conf_rts, os.path.join(run_dir, 'train_confusion_digit_rts.png'),
-                         title='Training Confusion Matrix (RtS, Digits)', normalize=True)
-    plot_confusion_matrix(train_color_conf_rts, os.path.join(run_dir, 'train_confusion_color_rts.png'),
-                         title='Training Confusion Matrix (RtS, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-    plot_confusion_matrix(test_digit_conf_rts, os.path.join(run_dir, 'test_confusion_digit_rts.png'),
-                         title='Test Confusion Matrix (RtS, Digits)', normalize=True)
-    plot_confusion_matrix(test_color_conf_rts, os.path.join(run_dir, 'test_confusion_color_rts.png'),
-                         title='Test Confusion Matrix (RtS, Colors)', normalize=True, is_color=True, n_colors=n_colors)
-=======
     # Split compositional confusion matrices for ID/OOD
     test_comp_conf_rts_id = test_comp_conf_rts[id_indices][:, id_indices]
     
@@ -765,30 +744,9 @@ def train_hebbian_colored_mnist(net_config, train_config):
     plot_confusion_matrix(test_comp_conf_decoder_ood, os.path.join(run_dir, 'decoder_confusion_compositional_ood_test.png'),
                          title='Test Confusion Matrix (Decoder, Compositional OOD)', normalize=True,
                          is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices)
->>>>>>> Stashed changes
     
-    # Plot compositional confusion matrices for RtS
-    plot_confusion_matrix(train_comp_conf_rts, os.path.join(run_dir, 'train_confusion_compositional_rts.png'),
-                         title='Training Confusion Matrix (RtS, Compositional)', normalize=True, 
-                         is_compositional=True, n_colors=n_colors, ood_indices=ood_indices)
-    plot_confusion_matrix(test_comp_conf_rts, os.path.join(run_dir, 'test_confusion_compositional_rts.png'),
-                         title='Test Confusion Matrix (RtS, Compositional)', normalize=True,
-                         is_compositional=True, n_colors=n_colors, ood_indices=ood_indices)
-    
-    # Compute class averages for each digit-color combination
+    # After computing compositional class averages...
     print("\nComputing compositional class averages...")
-<<<<<<< Updated upstream
-    class_averages = compute_compositional_averages(test_data, test_labels_cpu[:, :2], n_colors)
-    
-    # Create signific inputs for each digit-color combination
-    signific_inputs = []
-    for i, (digit, color) in enumerate([(d, c) for d in range(10) for c in range(n_colors)]):
-        signific = np.zeros(10 + n_colors)
-        signific[digit] = 1  # Set digit position
-        signific[10 + color] = 1  # Set color position
-        signific_inputs.append(signific)
-    
-=======
     class_averages = compute_compositional_averages(test_data, test_labels_cpu[:, :2], net_config.n_colors)
 
     # Create signific inputs for each digit-color combination
@@ -800,52 +758,27 @@ def train_hebbian_colored_mnist(net_config, train_config):
             signific[10 + color] = 1  # Set color position
             signific_inputs.append(signific)
 
->>>>>>> Stashed changes
     signific_inputs = to_device(np.stack(signific_inputs), net.device)
-    
+
     # Compute StR-rep association matrix
     print("\nComputing StR-rep association matrix...")
     n_combinations = 10 * net_config.n_colors
     similarity_matrix = cp.zeros((n_combinations, n_combinations)) if HAS_CUDA else np.zeros((n_combinations, n_combinations))
     for i in range(n_combinations):
-<<<<<<< Updated upstream
-        for j in range(n_combinations):
-            digit_i, color_i = i % 10, i // 10
-            digit_j, color_j = j % 10, j // 10
-=======
         digit_i, color_i = i // net_config.n_colors, i % net_config.n_colors
         for j in range(n_combinations):
             digit_j, color_j = j // net_config.n_colors, j % net_config.n_colors
->>>>>>> Stashed changes
             if (digit_j, color_j) in class_averages:  # Check if combination exists
                 similarity_matrix[i, j] = net.str_rep(
                     signific_inputs[i:i+1],
-<<<<<<< Updated upstream
-                    class_averages[(digit_j, color_j)].reshape(1, -1)
-                )
-    
-    # Plot association matrix
-    fig = plt.figure(figsize=(10, 9))
-    ax = plt.gca()
-    # Convert to NumPy before plotting
-    matrix_to_plot = to_device(association_matrix, 'cpu')
-    plot_association_matrix(matrix_to_plot, os.path.join(run_dir, 'str_rep_association.png'),
-                          title="StR-rep Association Matrix", n_colors=n_colors, ood_indices=ood_indices)
-    
-=======
                     class_averages[(digit_j, color_j)].reshape(1, -1))
 
->>>>>>> Stashed changes
     # Compute StR-rec reconstructions
     print("\nComputing StR-rec reconstructions...")
     reconstructions = []
     reconstruction_similarities = []
     for i in trange(n_combinations, desc="Computing reconstructions"):
-<<<<<<< Updated upstream
-        digit, color = i % 10, i // 10
-=======
         digit, color = i // net_config.n_colors, i % net_config.n_colors
->>>>>>> Stashed changes
         if (digit, color) in class_averages:  # Only reconstruct if combination exists
             # Get reconstruction
             recon = net.str_rec(signific_inputs[i:i+1])
@@ -858,29 +791,9 @@ def train_hebbian_colored_mnist(net_config, train_config):
                 xp=cp if HAS_CUDA else np
             )
             reconstruction_similarities.append(float(to_device(sim, 'cpu')))
-    
+
     # Stack reconstructions
     reconstructions = cp.stack(reconstructions) if HAS_CUDA else np.stack(reconstructions)
-<<<<<<< Updated upstream
-    
-    # Plot reconstructions
-    plot_reconstructions(
-        reconstructions,
-        np.stack([class_averages[(d, c)] for d, c in class_averages.keys()]),
-        os.path.join(run_dir, 'str_rec_reconstructions.png'),
-        n_colors=n_colors,
-        ood_indices=ood_indices
-    )
-    
-    # Plot reconstruction similarity matrix
-    plot_reconstruction_similarity_matrix(
-        reconstructions,
-        np.stack([class_averages[(d, c)] for d, c in class_averages.keys()]),
-        os.path.join(run_dir, 'str_rec_similarity.png'),
-        n_colors=n_colors,
-        ood_indices=ood_indices
-    )
-=======
 
     # Convert class_averages to list in same order as reconstructions
     class_averages_list = []
@@ -897,7 +810,6 @@ def train_hebbian_colored_mnist(net_config, train_config):
     # Plot reconstruction similarity matrices
     plot_reconstruction_similarity_matrix(reconstructions, class_averages_list, os.path.join(run_dir, 'str-rec_association_compositional_test.png'),
                                             n_colors=net_config.n_colors, train_indices=train_indices)
->>>>>>> Stashed changes
     
     # Print and save results
     print(f"\nResults:")

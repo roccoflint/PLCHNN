@@ -8,12 +8,9 @@ except ImportError:
 import scipy.io
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
-<<<<<<< Updated upstream
-=======
 import matplotlib.gridspec as gridspec
 import os
 import pandas as pd
->>>>>>> Stashed changes
 
 # Set publication-quality plot parameters
 plt.rcParams.update({
@@ -47,8 +44,6 @@ COLORS = {
     ])
 }
 
-<<<<<<< Updated upstream
-=======
 class ColoredMNIST:
     """Handles colored MNIST data representation and transformations."""
     
@@ -216,7 +211,6 @@ class ColoredMNIST:
         plt.tight_layout()
         return fig
 
->>>>>>> Stashed changes
 def multichannel_to_rgb(data, n_colors):
     """Convert multi-channel representation to RGB image.
     
@@ -304,14 +298,7 @@ def get_minibatch(data, labels, batch_size):
     return data[indices], labels[indices]
 
 def visualize_weights(net):
-    """Visualize network weights.
-    
-    Args:
-        net: HebbianNetwork instance
-        
-    Returns:
-        matplotlib figure
-    """
+    """Visualize network weights."""
     # Get first layer weights
     W = net.layers[0].W
     if HAS_CUDA:
@@ -356,11 +343,12 @@ def visualize_weights(net):
             
             # Plot
             axes[row, col].imshow(rgb + 0.5)  # Shift to [0, 1] range
+            axes[row, col].axis('off')
         else:
             # For regular MNIST, show grayscale
             weights = W[i].reshape(28, 28)
             axes[row, col].imshow(weights, cmap='RdBu_r', vmin=-0.5, vmax=0.5)
-        axes[row, col].axis('off')
+            axes[row, col].axis('off')
     
     # Hide empty subplots
     for i in range(n_units, n_rows * n_cols):
@@ -387,62 +375,30 @@ def cosine_similarity(v1, v2, xp=np):
     similarities = xp.sum(v1 * v2, axis=1) / (norms1.squeeze() * norms2.squeeze() + 1e-8)
     return xp.mean(similarities)
 
-<<<<<<< Updated upstream
-def plot_association_matrix(matrix, save_path, title="Association Matrix", n_colors=None, ood_indices=None):
-    """Plot association matrix between signific and referential pathways."""
-=======
 def plot_similarity_matrix(matrix, save_path, title="Similarity Matrix", n_colors=None, train_indices=None):
     """Plot similarity matrix with proper labels and colorbar."""
     # Convert CuPy array to NumPy if needed
->>>>>>> Stashed changes
     if HAS_CUDA and isinstance(matrix, cp.ndarray):
         matrix = matrix.get()
+    
+    # Initialize ColoredMNIST handler if needed
+    mnist = ColoredMNIST(n_colors) if n_colors is not None else None
+    
+    # Determine matrix type from save path
+    is_id = 'id' in save_path
+    is_ood = 'ood' in save_path
+    
+    # For ID/OOD splits, filter matrix to only show relevant combinations
+    if is_id or is_ood:
+        # Create mask for rows/columns
+        mask = np.zeros(matrix.shape[0], dtype=bool)
+        for i in range(matrix.shape[0]):
+            in_train = train_indices is not None and i in train_indices
+            mask[i] = (is_id and in_train) or (is_ood and not in_train)
         
-    fig = plt.figure(figsize=(8, 7))
-    ax = plt.gca()
-    im = ax.imshow(matrix, cmap='RdBu_r', vmin=-1, vmax=1)
+        # Filter matrix
+        matrix = matrix[mask][:, mask]
     
-<<<<<<< Updated upstream
-    # Add colorbar with scientific styling
-    cbar = plt.colorbar(im)
-    cbar.ax.set_ylabel('Cosine Similarity', rotation=270, labelpad=15)
-    
-    # Configure axes
-    n_classes = matrix.shape[0]
-    ax.set_xticks(np.arange(n_classes))
-    ax.set_yticks(np.arange(n_classes))
-    
-    # Generate labels with OOD marking
-    labels = []
-    for i in range(n_classes):
-        digit = i % 10
-        color = i // 10 if n_colors else None
-        if n_colors:
-            label = f"{COLOR_LABELS[color]}{digit}"
-            if ood_indices is not None and i in ood_indices:
-                label += "O"
-        else:
-            label = str(digit)
-        labels.append(label)
-    
-    ax.set_xticklabels(labels, rotation=45, ha='right')
-    ax.set_yticklabels(labels)
-    ax.set_xlabel('Target Class')
-    ax.set_ylabel('Source Class')
-    
-    # Add correlation values
-    for i in range(n_classes):
-        for j in range(n_classes):
-            text = ax.text(j, i, f"{matrix[i, j]:.2f}",
-                         ha="center", va="center", 
-                         color="white" if abs(matrix[i, j]) > 0.5 else "black",
-                         fontsize=8)
-    
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-=======
     # Create normalized version
     normalized_matrix = matrix.copy()
     for i in range(matrix.shape[0]):
@@ -498,7 +454,6 @@ def plot_similarity_matrix(matrix, save_path, title="Similarity Matrix", n_color
         plt.tight_layout()
         plt.savefig(save_path.replace('.png', f'{suffix}.png'), dpi=300, bbox_inches='tight')
         plt.close()
->>>>>>> Stashed changes
 
 def compute_class_averages(data, labels, num_classes, xp=np):
     """Compute average input for each class."""
@@ -510,87 +465,116 @@ def compute_class_averages(data, labels, num_classes, xp=np):
         averages.append(avg)
     return xp.stack(averages)
 
-def plot_reconstructions(reconstructions, class_averages, save_path, n_colors=2, ood_indices=None):
-    """Plot reconstructions and class averages side by side."""
-    # Convert to CPU if needed
+def plot_reconstructions(reconstructions, class_averages, save_path, n_colors=None, train_indices=None):
+    """Plot reconstructions and class averages."""
+    plt.close('all')
+    
+    # Convert CuPy arrays to NumPy if needed
     if HAS_CUDA:
-        reconstructions = cp.asnumpy(reconstructions)
-        class_averages = cp.asnumpy(class_averages)
+        if isinstance(reconstructions, cp.ndarray):
+            reconstructions = reconstructions.get()
+        if isinstance(class_averages, cp.ndarray):
+            class_averages = class_averages.get()
     
-    n_digits = 10
-    n_rows = 2 * n_colors  # One row for reconstructions, one for class averages per color
-    n_cols = n_digits
+    # Determine if this is colored MNIST based on input size
+    is_colored = n_colors is not None and reconstructions.shape[1] > 784
     
-    # Create figure with extra space on left for row labels and top for title
-    fig = plt.figure(figsize=(2*n_cols + 1, 2*n_rows + 1))  # Added height for title
-    gs = plt.GridSpec(n_rows, n_cols + 1,  # Add column for labels
-                     width_ratios=[0.2] + [1]*n_cols,  # First column narrow for labels
-                     top=0.85)  # Leave more space at top for title
-    
-    # Add main title with larger font
-    plt.suptitle('StR Reconstructions and Class Averages', fontsize=20, y=0.95)
-    
-    # Create mapping from digit-color pairs to indices
-    pair_to_idx = {(d, c): i for i, (d, c) in enumerate([(d, c) for d in range(n_digits) for c in range(n_colors)])}
-    
-    # Plot each color's reconstructions and class averages
-    for color in range(n_colors):
-        # Row indices for this color
-        recon_row = 2 * color  # Row for reconstructions
-        avg_row = 2 * color + 1  # Row for class averages
+    if is_colored:
+        # Initialize composition tracker and ColoredMNIST handler
+        composition_tracker = CompositionTracker(n_colors, train_indices)
+        mnist = ColoredMNIST(n_colors, composition_tracker=composition_tracker)
+        
+        # Create figure with proper dimensions
+        n_digits = 10
+        fig = plt.figure(figsize=(10, 2*n_colors))
+        gs = gridspec.GridSpec(2*n_colors, n_digits + 1)
+        
+        # Plot reconstructions and class averages for each color
+        for color in range(n_colors):
+            # Add row labels
+            recon_label = plt.subplot(gs[2*color, 0])
+            recon_label.text(0.5, 0.5, "Reconst.", 
+                           rotation=90, ha='right', va='center',
+                           fontsize=9)
+            recon_label.axis('off')
+            
+            avg_label = plt.subplot(gs[2*color + 1, 0])
+            avg_label.text(0.5, 0.5, "Class Avg.",
+                         rotation=90, ha='right', va='center',
+                         fontsize=9)
+            avg_label.axis('off')
+            
+            # Plot each digit in this color row
+            for digit in range(n_digits):
+                idx = composition_tracker.get_composition_index(digit, color)
+                is_ood = not composition_tracker.is_id(idx)
+                
+                # Plot reconstruction
+                ax = plt.subplot(gs[2*color, digit + 1])
+                img_rgb = mnist.to_rgb(reconstructions[idx])
+                if HAS_CUDA and isinstance(img_rgb, cp.ndarray):
+                    img_rgb = img_rgb.get()
+                ax.imshow(img_rgb)
+                ax.axis('off')
+                
+                # Add label with OOD marker if needed
+                label = mnist.get_label(digit, color, mark_ood=is_ood)
+                ax.set_title(label, fontsize=7)
+                
+                # Plot class average
+                ax = plt.subplot(gs[2*color + 1, digit + 1])
+                img_rgb = mnist.to_rgb(class_averages[idx])
+                if HAS_CUDA and isinstance(img_rgb, cp.ndarray):
+                    img_rgb = img_rgb.get()
+                ax.imshow(img_rgb)
+                ax.axis('off')
+                
+                # Add label with OOD marker if needed
+                label = mnist.get_label(digit, color, mark_ood=is_ood)
+                ax.set_title(label, fontsize=7)
+    else:
+        # Regular MNIST plotting
+        n_digits = 10
+        fig = plt.figure(figsize=(10, 2.34))
+        gs = gridspec.GridSpec(2, n_digits + 1)
         
         # Add row labels
-        recon_label = fig.add_subplot(gs[recon_row, 0])
-        recon_label.text(0.5, 0.5, 'Reconstruction', 
-                        rotation=90, ha='center', va='center', fontsize=12)
+        recon_label = plt.subplot(gs[0, 0])
+        recon_label.text(0.5, 0.5, "Reconst.", 
+                        rotation=90, ha='right', va='center',
+                        fontsize=9)
         recon_label.axis('off')
         
-        avg_label = fig.add_subplot(gs[avg_row, 0])
-        avg_label.text(0.5, 0.5, 'Class Average',
-                      rotation=90, ha='center', va='center', fontsize=12)
+        avg_label = plt.subplot(gs[1, 0])
+        avg_label.text(0.5, 0.5, "Class Avg.",
+                      rotation=90, ha='right', va='center',
+                      fontsize=9)
         avg_label.axis('off')
         
-        # Plot each digit for this color
+        # Plot each digit
         for digit in range(n_digits):
-            idx = pair_to_idx[(digit, color)]
-            
-            # Skip if this combination is not in our data
-            if idx >= len(reconstructions) or idx >= len(class_averages):
-                continue
-            
             # Plot reconstruction
-            ax = fig.add_subplot(gs[recon_row, digit + 1])  # +1 for label column
-            recon_rgb = multichannel_to_rgb(reconstructions[idx], n_colors)
-            if HAS_CUDA:
-                recon_rgb = cp.asnumpy(recon_rgb)
-            ax.imshow(recon_rgb)
+            ax = plt.subplot(gs[0, digit + 1])
+            img = reconstructions[digit].reshape(28, 28)
+            if HAS_CUDA and isinstance(img, cp.ndarray):
+                img = img.get()
+            ax.imshow(img, cmap='gray')
             ax.axis('off')
-            
-            # Add label with OOD marker if needed
-            label = f"{COLOR_LABELS[color]}{digit}"
-            if ood_indices and idx in ood_indices:
-                label += "O"
-            ax.set_title(label, fontsize=14)  # Increased font size for image labels
+            ax.set_title(str(digit), fontsize=7)
             
             # Plot class average
-            ax = fig.add_subplot(gs[avg_row, digit + 1])  # +1 for label column
-            avg_rgb = multichannel_to_rgb(class_averages[idx], n_colors)
-            if HAS_CUDA:
-                avg_rgb = cp.asnumpy(avg_rgb)
-            ax.imshow(avg_rgb)
+            ax = plt.subplot(gs[1, digit + 1])
+            img = class_averages[digit].reshape(28, 28)
+            if HAS_CUDA and isinstance(img, cp.ndarray):
+                img = img.get()
+            ax.imshow(img, cmap='gray')
             ax.axis('off')
+            ax.set_title(str(digit), fontsize=7)
     
-    plt.tight_layout()
-    plt.savefig(save_path, bbox_inches='tight')
+    plt.suptitle("StR-rec Reconstructions", fontsize=10)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-<<<<<<< Updated upstream
-def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False, is_color=False, n_colors=None, is_compositional=False, ood_indices=None):
-    """Plot confusion matrix with publication-quality styling."""
-    if normalize:
-        conf_matrix = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]
-        fmt = '.2f'
-=======
 def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False, is_color=False, n_colors=None, is_compositional=False, train_indices=None):
     """Plot confusion matrix with proper labels and normalization."""
     plt.close()
@@ -668,23 +652,9 @@ def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False, i
             digit, color = composition_tracker.get_digit_color(actual_idx)
             label = mnist.get_label(digit, color, mark_ood=is_ood)
             labels.append(label)
->>>>>>> Stashed changes
     else:
-        fmt = 'd'
+        labels = [str(i) for i in range(conf_matrix.shape[0])]
     
-<<<<<<< Updated upstream
-    n_classes = conf_matrix.shape[0]
-    fig = plt.figure(figsize=(8, 7))
-    ax = plt.gca()
-    
-    # Use a perceptually uniform colormap
-    im = ax.imshow(conf_matrix, cmap='Blues', aspect='equal')
-    
-    # Add colorbar with scientific styling
-    cbar = plt.colorbar(im)
-    cbar.ax.set_ylabel('Normalized Count' if normalize else 'Count', 
-                      rotation=270, labelpad=15)
-=======
     # Set labels with proper rotation and alignment
     ax.set_xticks(np.arange(len(conf_matrix)))
     ax.set_yticks(np.arange(len(conf_matrix)))
@@ -717,67 +687,25 @@ def plot_confusion_matrix(conf_matrix, save_path, title=None, normalize=False, i
         else:
             title += ' (Digits)'
     plt.title(title, pad=20, fontsize=16)
->>>>>>> Stashed changes
     
-    # Configure axes
-    ax.set_xticks(np.arange(n_classes))
-    ax.set_yticks(np.arange(n_classes))
-    
-    # Generate labels based on type
-    if is_compositional:
-        # For compositional classes (e.g. 'r9' for red 9)
-        labels = []
-        for i in range(n_classes):
-            digit = i % 10
-            color = i // 10
-            label = f"{COLOR_LABELS[color]}{digit}"
-            if ood_indices is not None and i in ood_indices:
-                label += "O"
-            labels.append(label)
-    elif is_color:
-        # For color-only plots (e.g. 'r' for red)
-        labels = [COLOR_LABELS[i] for i in range(n_colors)]
-    else:
-        # For digit-only plots (e.g. '9' for nine)
-        labels = [str(i) for i in range(n_classes)]
-    
-    # Rotate x-axis labels for better readability in compositional case
-    if is_compositional:
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_yticklabels(labels)
-    else:
-        ax.set_xticklabels(labels)
-        ax.set_yticklabels(labels)
-    
-    ax.set_xlabel('Predicted Class')
-    ax.set_ylabel('True Class')
-    
-    # Add counts as text with smaller font size for compositional case
-    thresh = conf_matrix.max() / 2
-    for i in range(n_classes):
-        for j in range(n_classes):
-            fontsize = 8 if is_compositional else 10  # Match str_rec_similarity_matrix font size
-            text = ax.text(j, i, format(conf_matrix[i, j], fmt),
-                         ha="center", va="center",
-                         color="white" if conf_matrix[i, j] > thresh else "black",
-                         fontsize=fontsize)
-    
-    if title:
-        plt.title(title)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_path, n_colors=None, ood_indices=None):
+def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_path, n_colors=None, train_indices=None):
     """Plot similarity matrix between reconstructions and class averages using SSIM."""
     if HAS_CUDA:
         reconstructions = reconstructions.get()
         class_averages = class_averages.get()
     
+    # Initialize composition tracker and ColoredMNIST handler
+    composition_tracker = CompositionTracker(n_colors, train_indices) if n_colors is not None else None
+    mnist = ColoredMNIST(n_colors, composition_tracker=composition_tracker) if n_colors is not None else None
+    
     # Convert to RGB if colored MNIST
-    if n_colors is not None:
-        recon_images = [multichannel_to_rgb(r, n_colors) for r in reconstructions]
-        avg_images = [multichannel_to_rgb(a, n_colors) for a in class_averages]
+    if mnist is not None:
+        recon_images = [mnist.to_rgb(r) for r in reconstructions]
+        avg_images = [mnist.to_rgb(a) for a in class_averages]
         channel_axis = -1  # RGB channels are in the last dimension
     else:
         recon_images = [r.reshape(28, 28) for r in reconstructions]
@@ -801,55 +729,113 @@ def plot_reconstruction_similarity_matrix(reconstructions, class_averages, save_
         if row_max > row_min:
             normalized_matrix[i] = (normalized_matrix[i] - row_min) / (row_max - row_min)
     
-    # Plot both matrices
-    for matrix, suffix in [(similarity_matrix, ''), (normalized_matrix, '_normalized')]:
-        fig = plt.figure(figsize=(8, 7))
+    # Plot matrices based on ID/OOD split
+    if composition_tracker is not None:
+        # Plot ID matrix
+        id_matrix = similarity_matrix[composition_tracker.id_mask][:, composition_tracker.id_mask]
+        id_norm_matrix = normalized_matrix[composition_tracker.id_mask][:, composition_tracker.id_mask]
+        plot_similarity_submatrix(
+            id_matrix, id_norm_matrix,
+            save_path.replace('.png', '_id.png'),
+            composition_tracker=composition_tracker,
+            mnist=mnist,
+            indices=composition_tracker.id_indices,
+            title_suffix=' - ID Only'
+        )
+        
+        # Plot OOD matrix
+        ood_matrix = similarity_matrix[composition_tracker.ood_mask][:, composition_tracker.ood_mask]
+        ood_norm_matrix = normalized_matrix[composition_tracker.ood_mask][:, composition_tracker.ood_mask]
+        plot_similarity_submatrix(
+            ood_matrix, ood_norm_matrix,
+            save_path.replace('.png', '_ood.png'),
+            composition_tracker=composition_tracker,
+            mnist=mnist,
+            indices=composition_tracker.ood_indices,
+            title_suffix=' - OOD Only'
+        )
+        
+        # Plot full matrix
+        plot_similarity_submatrix(
+            similarity_matrix, normalized_matrix,
+            save_path,
+            composition_tracker=composition_tracker,
+            mnist=mnist,
+            indices=np.arange(n_samples)
+        )
+    else:
+        # Plot regular matrix for non-compositional case
+        plot_similarity_submatrix(
+            similarity_matrix, normalized_matrix,
+            save_path,
+            indices=np.arange(n_samples)
+        )
+
+def plot_similarity_submatrix(matrix, normalized_matrix, save_path, composition_tracker=None, mnist=None, indices=None, title_suffix=''):
+    """Helper function to plot a similarity matrix with proper labels."""
+    # Convert CuPy arrays to NumPy if needed
+    if HAS_CUDA:
+        if isinstance(matrix, cp.ndarray):
+            matrix = matrix.get()
+        if isinstance(normalized_matrix, cp.ndarray):
+            normalized_matrix = normalized_matrix.get()
+    
+    for matrix_to_plot, suffix in [(matrix, ''), (normalized_matrix, '_normalized')]:
+        fig = plt.figure(figsize=(10, 8))
         ax = plt.gca()
         vmin, vmax = (-1, 1) if suffix == '' else (0, 1)
-        im = ax.imshow(matrix, cmap='RdBu_r', vmin=vmin, vmax=vmax)
+        im = ax.imshow(matrix_to_plot, cmap='RdBu_r', vmin=vmin, vmax=vmax)
         
         # Add colorbar with scientific styling
         cbar = plt.colorbar(im)
         cbar.ax.set_ylabel('SSIM' + (' (Normalized)' if suffix == '_normalized' else ''), 
                           rotation=270, labelpad=15)
         
-        # Configure axes
-        ax.set_xticks(np.arange(n_samples))
-        ax.set_yticks(np.arange(n_samples))
-        
         # Generate labels
-        labels = []
-        for i in range(n_samples):
-            digit = i % 10
-            color = i // 10 if n_colors else None
-            if n_colors:
-                label = f"{COLOR_LABELS[color]}{digit}"
-                if ood_indices is not None and i in ood_indices:
-                    label += "O"
-            else:
-                label = str(digit)
-            labels.append(label)
+        if composition_tracker is not None and mnist is not None:
+            labels = []
+            for idx in indices:
+                digit, color = composition_tracker.get_digit_color(idx)
+                is_ood = not composition_tracker.is_id(idx)
+                label = mnist.get_label(digit, color, mark_ood=is_ood)
+                labels.append(label)
+        else:
+            labels = [str(i) for i in range(len(matrix_to_plot))]
         
+        # Set labels with proper rotation and alignment
+        ax.set_xticks(np.arange(len(matrix_to_plot)))
+        ax.set_yticks(np.arange(len(matrix_to_plot)))
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.set_yticklabels(labels)
+        
+        # Add similarity values with appropriate size and color
+        for i in range(len(matrix_to_plot)):
+            for j in range(len(matrix_to_plot)):
+                value = matrix_to_plot[i, j]
+                color = 'white' if abs(value) > 0.5 else 'black'
+                ax.text(j, i, f"{value:.2f}", ha="center", va="center",
+                       color=color, fontsize=8)
+        
         ax.set_xlabel('Class Average')
         ax.set_ylabel('Reconstruction')
-        
-        # Add similarity values
-        for i in range(n_samples):
-            for j in range(n_samples):
-                text = ax.text(j, i, f"{matrix[i, j]:.2f}",
-                             ha="center", va="center",
-                             color="black" if abs(matrix[i, j]) < 0.5 else "white",
-                             fontsize=8)
-        
-        plt.title("StR-rec Similarity Matrix" + (' (Normalized)' if suffix == '_normalized' else ''))
+        plt.title("StR-rec Similarity Matrix" + title_suffix + (' (Normalized)' if suffix == '_normalized' else ''))
         plt.tight_layout()
         plt.savefig(save_path.replace('.png', f'{suffix}.png'), dpi=300, bbox_inches='tight')
         plt.close()
 
 def compute_compositional_confusion_matrix(digit_preds, color_preds, digit_labels, color_labels):
     """Compute confusion matrix for compositional predictions."""
+    # Convert to CPU numpy if needed
+    if HAS_CUDA:
+        if isinstance(digit_preds, cp.ndarray):
+            digit_preds = digit_preds.get()
+        if isinstance(color_preds, cp.ndarray):
+            color_preds = color_preds.get()
+        if isinstance(digit_labels, cp.ndarray):
+            digit_labels = digit_labels.get()
+        if isinstance(color_labels, cp.ndarray):
+            color_labels = color_labels.get()
+    
     n_colors = len(np.unique(color_labels))
     n_digits = 10
     n_classes = n_colors * n_digits
@@ -878,11 +864,6 @@ def compute_confusion_matrix(true_labels, pred_labels, num_classes=None):
     
     conf_matrix = np.zeros((num_classes, num_classes), dtype=np.int64)
     for t, p in zip(true_labels, pred_labels):
-<<<<<<< Updated upstream
-        confusion_matrix[t, p] += 1
-    
-    return confusion_matrix 
-=======
         conf_matrix[t, p] += 1
     return conf_matrix
 
@@ -1218,4 +1199,3 @@ def compute_gmcc(conf_matrix):
         return None
     
     return cov_x_y / np.sqrt(cov_x_x * cov_y_y) 
->>>>>>> Stashed changes
