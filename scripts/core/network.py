@@ -243,6 +243,7 @@ class HebbianNetwork:
         # Apply nonlinearity with same power for both
         power = self.p * self.signific_p_multiplier - 1
         
+<<<<<<< Updated upstream
         # Process digits
         sig_digits = self.xp.sign(digit_activations)
         act_digits = sig_digits * self.xp.abs(digit_activations)**power
@@ -256,6 +257,24 @@ class HebbianNetwork:
         color_classes = self.xp.argmax(act_colors, axis=0)
         
         return [digit_classes, color_classes]
+=======
+        # Process all activations at once
+        sig = self.xp.sign(signific_activations)
+        act = sig * self.xp.abs(signific_activations)**power
+        
+        # Normalize each component separately
+        digit_act = act[:n_digits]
+        digit_act = digit_act / (self.xp.sum(self.xp.abs(digit_act), axis=0, keepdims=True) + 1e-8)
+        digit_classes = self.xp.argmax(digit_act, axis=0)
+        
+        if has_colors:
+            color_act = act[n_digits:]
+            color_act = color_act / (self.xp.sum(self.xp.abs(color_act), axis=0, keepdims=True) + 1e-8)
+            color_classes = self.xp.argmax(color_act, axis=0)
+            return [digit_classes, color_classes]
+        else:
+            return [digit_classes]
+>>>>>>> Stashed changes
     
     def to_device(self, device):
         """Move network to specified device."""
@@ -320,11 +339,16 @@ class HebbianNetwork:
                     activations.append(h)
             return activations
 
-    def str_rec(self, signific_input, max_iter=500, init_lr=5.0, tol=1e-5, patience=10, min_steps=50, component_sizes=None):
-        """Reconstruct input from signific input using either direct weight reversal or gradient descent."""
-        # First compute target activations from signific input
-        target_acts = self._get_hidden_activations(signific_input, is_signific=True)
+    def str_rec(self, signific_input):
+        """Reconstruct input from signific input using direct weight reversal for single layer networks."""
+        # Only support single layer networks
+        if len(self.layers) != 1 or len(self.signific_weights) != 1:
+            raise ValueError("str_rec currently only supports single layer networks")
+
+        # Project signific input to hidden layer using signific weights with increased power
+        W_sig = self.signific_weights[0]  # Shape: (signific_size, hidden_size)
         
+<<<<<<< Updated upstream
         # For single hidden layer, use direct weight reversal
         if len(self.layers) == 1 and len(self.signific_weights) == 1:
             # Step 1: Project signific input to hidden layer using signific weights with increased power
@@ -400,100 +424,96 @@ class HebbianNetwork:
                     x[:, start_idx:end_idx] = x_color * float(color_weights[0, c])
             
             return x
+=======
+        # Check if we have color components
+        n_digits = 10
+        has_colors = signific_input.shape[1] > n_digits
+>>>>>>> Stashed changes
         
-        # For multiple hidden layers or compositional inputs, optimize referential input
-        print("\nUsing gradient descent for reconstruction...")
-        target_vector = self.xp.concatenate([act.flatten() for act in target_acts])
+        if has_colors:
+            # Handle colored MNIST case
+            digit_input = signific_input[:, :n_digits]
+            color_input = signific_input[:, n_digits:]
+            W_digits = W_sig[:n_digits]
+            W_colors = W_sig[n_digits:]
+            
+            # Get number of colors from signific input size
+            n_colors = color_input.shape[1]
+            
+            # Project each component separately with increased power
+            power = self.p * self.signific_p_multiplier - 1
+            
+            # Project digits to get digit-specific hidden activations
+            sig_digits = self.xp.sign(W_digits)
+            hidden_digits = self.xp.dot(digit_input, sig_digits * self.xp.abs(W_digits)**power)
+            
+            # Project colors to get color-specific hidden activations
+            sig_colors = self.xp.sign(W_colors)
+            hidden_colors = self.xp.dot(color_input, sig_colors * self.xp.abs(W_colors)**power)
+            
+            # Combine hidden activations
+            hidden = hidden_digits + hidden_colors
+            
+            # Project hidden activations back to input using referential weights
+            W_ref = self.layers[0].W  # Shape: (hidden_size, input_size)
+            
+            # Split referential weights into intensity and color channels
+            W_intensity = W_ref[:, :784]  # Weights for intensity channel
+            W_colors = [W_ref[:, 784*(i+1):784*(i+2)] for i in range(n_colors)]  # Weights for each color channel
+            
+            # First reconstruct the intensity pattern
+            sig_intensity = self.xp.sign(W_intensity)
+            W_intensity_nonlinear = sig_intensity * self.xp.abs(W_intensity)**(self.p - 1)
+            x_intensity = self.xp.dot(hidden, W_intensity_nonlinear)
+            
+            # Initialize output with zeros
+            x = self.xp.zeros((signific_input.shape[0], 784 * (1 + n_colors)), dtype=x_intensity.dtype)
+            
+            # Normalize intensity pattern to [0, 1]
+            x_intensity = x_intensity - self.xp.min(x_intensity, axis=1, keepdims=True)
+            x_intensity = x_intensity / (self.xp.max(x_intensity, axis=1, keepdims=True) + 1e-8)
+            x[:, :784] = x_intensity
+            
+            # Get color weights from signific input
+            color_weights = self.xp.abs(color_input)  # Shape: (batch, n_colors)
+            
+            # For each color channel, reconstruct using color-specific weights
+            for c in range(n_colors):
+                if color_weights[0, c] > 0:  # If this color is active
+                    # Get color-specific weights
+                    sig_color = self.xp.sign(W_colors[c])
+                    W_color_nonlinear = sig_color * self.xp.abs(W_colors[c])**(self.p - 1)
+                    
+                    # Project to color channel
+                    x_color = self.xp.dot(hidden, W_color_nonlinear)
+                    
+                    # Normalize color pattern to [0, 1]
+                    x_color = x_color - self.xp.min(x_color, axis=1, keepdims=True)
+                    x_color = x_color / (self.xp.max(x_color, axis=1, keepdims=True) + 1e-8)
+                    
+                    # Scale by color weight and copy to appropriate channel
+                    start_idx = 784 * (c + 1)
+                    end_idx = start_idx + 784
+                    x[:, start_idx:end_idx] = x_color * float(color_weights[0, c])
+        else:
+            # Handle regular MNIST case
+            power = self.p * self.signific_p_multiplier - 1
+            
+            # Project digits to get hidden activations
+            sig = self.xp.sign(W_sig)
+            hidden = self.xp.dot(signific_input, sig * self.xp.abs(W_sig)**power)
+            
+            # Project hidden activations back to input using referential weights
+            W_ref = self.layers[0].W  # Shape: (hidden_size, input_size)
+            sig = self.xp.sign(W_ref)
+            W_nonlinear = sig * self.xp.abs(W_ref)**(self.p - 1)
+            x = self.xp.dot(hidden, W_nonlinear)
+            
+            # Normalize to [0, 1] per sample
+            x = x - self.xp.min(x, axis=1, keepdims=True)
+            x = x / (self.xp.max(x, axis=1, keepdims=True) + 1e-8)
         
-        # Initialize with random values in [0, 1]
-        x = self.xp.random.uniform(0, 1, (1, self.layers[0].input_size))
-        best_x = x.copy()
-        best_loss = float('inf')
-        no_improvement = 0
-        momentum = self.xp.zeros_like(x)
-        beta = 0.9  # Momentum coefficient
-        
-        # If using component-wise optimization, get component masks
-        if component_sizes is not None:
-            start_idx = 0
-            component_masks = []
-            for size in component_sizes:
-                mask = self.xp.zeros(self.signific_size, dtype=bool)
-                mask[start_idx:start_idx + size] = True
-                component_masks.append(mask)
-                start_idx += size
-        
-        print(f"Optimizing reconstruction:")
-        for i in range(max_iter):
-            # Compute current learning rate
-            progress = (i - min_steps) / (max_iter - min_steps) if i >= min_steps else 0
-            lr = init_lr * (1 - 0.7 * progress)
-            
-            # Forward pass to get current hidden representations
-            current_acts = self._get_hidden_activations(x, is_signific=False)
-            current_vector = self.xp.concatenate([act.flatten() for act in current_acts])
-            
-            # Compute loss - either overall or component-wise
-            if component_sizes is None:
-                # Overall cosine similarity
-                loss = 1 - float(cosine_similarity([current_vector], [target_vector], xp=self.xp))
-            else:
-                # Component-wise loss
-                loss = 0
-                for mask in component_masks:
-                    # Get masked vectors for this component
-                    current_comp = current_vector[mask]
-                    target_comp = target_vector[mask]
-                    loss += 1 - float(cosine_similarity([current_comp], [target_comp], xp=self.xp))
-                loss /= len(component_masks)  # Average across components
-            
-            # Update best solution
-            if loss < best_loss - tol:
-                best_loss = loss
-                best_x = x.copy()
-                no_improvement = 0
-            else:
-                no_improvement += 1
-            
-            # Early stopping check
-            if i >= min_steps and no_improvement >= patience:
-                print(f"Early stopping at iteration {i} - Loss: {loss:.4f}")
-                break
-            
-            # Compute gradient using finite differences
-            eps = max(1e-4, min(1e-2, loss))  # Adaptive epsilon based on loss
-            perturbations = eps * self.xp.random.randn(self.layers[0].input_size)
-            x_perturbed = x + perturbations
-            
-            # Forward pass on perturbation
-            perturbed_acts = self._get_hidden_activations(x_perturbed, is_signific=False)
-            perturbed_vector = self.xp.concatenate([act.flatten() for act in perturbed_acts])
-            
-            # Compute perturbed loss
-            if component_sizes is None:
-                perturbed_loss = 1 - float(cosine_similarity([perturbed_vector], [target_vector], xp=self.xp))
-            else:
-                perturbed_loss = 0
-                for mask in component_masks:
-                    perturbed_comp = perturbed_vector[mask]
-                    target_comp = target_vector[mask]
-                    perturbed_loss += 1 - float(cosine_similarity([perturbed_comp], [target_comp], xp=self.xp))
-                perturbed_loss /= len(component_masks)
-            
-            # Compute gradient
-            grad = (perturbed_loss - loss) / eps * perturbations
-            
-            # Update with momentum and gradient clipping
-            momentum = beta * momentum + (1 - beta) * grad
-            update = lr * momentum
-            
-            if i % 20 == 0:
-                grad_norm = float(self.xp.sqrt(self.xp.sum(grad * grad)))
-                print(f"Iteration {i}: Loss = {loss:.4f}, Gradient norm = {grad_norm:.4f}")
-            
-            x = self.xp.clip(x - update, 0, 1)
-        
-        return best_x
+        return x
 
     def str_rep(self, signific_input, class_avg_input):
         """Compute cosine similarity between signific and referential pathways."""

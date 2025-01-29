@@ -1,7 +1,13 @@
-numpy>=1.19.2
-scipy>=1.7.0
-matplotlib>=3.4.3
-tqdm>=4.62.3
-cupy-cuda11x>=11.0.0
-scikit-image>=0.19.3
-nvidia-cuda-toolkit
+numpy>=1.26.3
+scipy>=1.15.1
+matplotlib>=3.10.0
+tqdm>=4.67.1
+scikit-image>=0.25.0
+pandas>=2.2.3
+torch>=2.4.1
+torchvision>=0.19.1
+optuna>=4.2.0
+plotly>=5.24.1
+kaleido>=0.2.1
+scikit-learn>=1.6.1
+# CUDA packages will be installed based on detected CUDA version

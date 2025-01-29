@@ -1,0 +1,31 @@
+{
+  "pareto_front": [
+    {
+      "number": 0,
+      "values": [
+        1.230456861519038
+      ],
+      "params": {
+        "hidden_size": 202,
+        "p": 2.848654740531294,
+        "k": 4,
+        "delta": 0.4735287774202731,
+        "signific_p_multiplier": 3.890304084698597,
+        "allow_pathway_interaction": true,
+        "n_epochs": 25,
+        "batch_size": 72,
+        "learning_rate": 0.010164946715927848
+      }
+    }
+  ],
+  "n_trials": 5,
+  "n_complete": 5,
+  "n_pruned": 0,
+  "best_value_history": [
+    1.230456861519038,
+    1.230456861519038,
+    1.230456861519038,
+    1.230456861519038,
+    1.230456861519038
+  ]
+}
