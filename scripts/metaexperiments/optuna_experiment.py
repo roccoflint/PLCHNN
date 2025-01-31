@@ -13,115 +13,108 @@ from core.config import NetworkConfig, TrainingConfig
 from experiments.mnist import train_hebbian_mnist
 from experiments.colored_mnist import train_hebbian_colored_mnist
 from core.stats import test_gmcc
+from core.utils import compute_gmcc
 
 def frobenius_norm_from_identity(matrix):
     """Compute Frobenius norm difference from identity matrix."""
     identity = np.eye(matrix.shape[0])
     return np.linalg.norm(matrix - identity, ord='fro')
 
-def compute_gmcc(conf_matrix):
-    """Compute Generalized Matthews Correlation Coefficient from confusion matrix."""
-    n_classes = conf_matrix.shape[0]
-    
-    # Convert to probabilities
-    conf_matrix = conf_matrix / conf_matrix.sum()
-    
-    # Compute GMCC components
-    cov_x_y = 0
-    cov_x_x = 0
-    cov_y_y = 0
-    
-    row_sums = conf_matrix.sum(axis=1)
-    col_sums = conf_matrix.sum(axis=0)
-    
-    for i in range(n_classes):
-        for j in range(n_classes):
-            cov_x_y += (i * j) * conf_matrix[i, j]
-            cov_x_x += (i * i) * row_sums[i]
-            cov_y_y += (j * j) * col_sums[j]
-    
-    mean_x = sum(i * row_sums[i] for i in range(n_classes))
-    mean_y = sum(j * col_sums[j] for j in range(n_classes))
-    
-    cov_x_y -= mean_x * mean_y
-    cov_x_x -= mean_x * mean_x
-    cov_y_y -= mean_y * mean_y
-    
-    if cov_x_x * cov_y_y == 0:
-        return 0
-    
-    return cov_x_y / np.sqrt(cov_x_x * cov_y_y)
-
-def compute_mnist_loss(results_dict):
-    """Compute loss for MNIST experiment."""
+def compute_mnist_loss(results_dict, use_frobenius=True):
+    """Compute loss for MNIST experiment using either GMCC and Frobenius norm or raw accuracies."""
     # Extract matrices
     str_rec_matrix = results_dict['str_rec_matrix']
     test_conf_rts = results_dict['test_conf_rts']
     
-    # Compute raw FN from StR-rec matrix (already using cosine similarities)
-    str_rec_fn = frobenius_norm_from_identity(str_rec_matrix)
-    
-    # Compute GMCC from test confusion matrix
-    rts_gmcc = compute_gmcc(test_conf_rts)
-    
-    # Handle failed GMCC computation
-    if rts_gmcc is None or np.isnan(rts_gmcc):
-        rts_gmcc = -1  # Worst possible GMCC
-    
-    # Equal weighting between StR-rec and RtS performance
-    # Note: str_rec_fn should be minimized, while rts_gmcc should be maximized
-    # rts_gmcc is in [-1, 1], so we use (1 - rts_gmcc) / 2 to get [0, 1]
-    loss = 0.5 * str_rec_fn + 0.5 * (1 - rts_gmcc)
+    if use_frobenius:
+        # Compute Frobenius norms from identity for both matrices
+        str_rec_fn = frobenius_norm_from_identity(str_rec_matrix)
+        rts_fn = frobenius_norm_from_identity(test_conf_rts / np.sum(test_conf_rts, axis=1, keepdims=True))  # Normalize confusion matrix
+        
+        # Equal weighting between StR-rec and RtS performance
+        loss = 0.5 * str_rec_fn + 0.5 * rts_fn
+    else:
+        # Use raw accuracies
+        str_sim = np.mean(np.diag(str_rec_matrix))  # Average diagonal elements for reconstruction accuracy
+        test_acc = np.sum(np.diag(test_conf_rts)) / np.sum(test_conf_rts)  # Classification accuracy
+        
+        # Convert to losses (1 - accuracy)
+        str_loss = 1 - str_sim
+        rts_loss = 1 - test_acc
+        
+        # Equal weighting between StR-rec and RtS
+        loss = 0.5 * str_loss + 0.5 * rts_loss
     
     return loss
 
-def compute_colored_mnist_loss(results_dict, train_indices):
-    """Compute loss for colored MNIST experiment, focusing only on OOD performance."""
+def compute_colored_mnist_loss(results_dict, train_indices, use_frobenius=True):
+    """Compute loss for colored MNIST experiment using either Frobenius norm or raw accuracies."""
     try:
-        # Extract matrices
+        # Extract matrices and raw accuracies
         str_rec_matrix = results_dict['str_rec_matrix']
-        test_comp_conf_rts = results_dict['test_comp_conf_rts']
+        unconstrained_test_comp_conf = results_dict['unconstrained_test_comp_conf']
         
-        # Create OOD mask
-        n_combinations = str_rec_matrix.shape[0]
-        id_mask = np.zeros(n_combinations, dtype=bool)
+        # Create ID/OOD masks
+        n_classes = str_rec_matrix.shape[0]
+        id_mask = np.zeros(n_classes, dtype=bool)
         id_mask[train_indices] = True
         ood_mask = ~id_mask
         
-        # Get OOD matrices
+        # Split StR matrix into ID and OOD
+        str_rec_id = str_rec_matrix[id_mask][:, id_mask]
         str_rec_ood = str_rec_matrix[ood_mask][:, ood_mask]
-        test_conf_ood = test_comp_conf_rts[ood_mask][:, ood_mask]
         
-        # Compute OOD StR-rec Frobenius norm
-        ood_fn = frobenius_norm_from_identity(str_rec_ood)
+        # Split confusion matrix into ID and OOD
+        conf_id = unconstrained_test_comp_conf[id_mask][:, id_mask]
+        conf_ood = unconstrained_test_comp_conf[ood_mask][:, ood_mask]
         
-        # Compute OOD GMCC
-        ood_gmcc = compute_gmcc(test_conf_ood)
-        
-        # Handle failed GMCC computation
-        if ood_gmcc is None or np.isnan(ood_gmcc):
-            ood_gmcc = -1  # Worst possible GMCC
-        
-        # Handle NaN in Frobenius norm
-        if np.isnan(ood_fn):
-            ood_fn = float('inf')  # Worst possible FN
-        
-        # Equal weighting between OOD StR-rec and OOD RtS performance
-        # Note: ood_fn should be minimized, while ood_gmcc should be maximized
-        # ood_gmcc is in [-1, 1], so we use (1 - ood_gmcc) / 2 to get [0, 1]
-        loss = 0.5 * ood_fn + 0.5 * (1 - ood_gmcc)
-        
-        # Final safety check
-        if np.isnan(loss) or np.isinf(loss):
-            return float('inf')  # Return worst possible loss
+        if use_frobenius:
+            # Compute Frobenius norm from identity for both ID and OOD
+            str_loss_id = frobenius_norm_from_identity(str_rec_id)
+            str_loss_ood = frobenius_norm_from_identity(str_rec_ood)
             
+            # Normalize confusion matrices and compute Frobenius norms
+            conf_id_norm = conf_id / (np.sum(conf_id, axis=1, keepdims=True) + 1e-10)
+            conf_ood_norm = conf_ood / (np.sum(conf_ood, axis=1, keepdims=True) + 1e-10)
+            rts_loss_id = frobenius_norm_from_identity(conf_id_norm)
+            rts_loss_ood = frobenius_norm_from_identity(conf_ood_norm)
+            
+            # Apply exponential penalty to OOD losses
+            str_loss_ood = np.exp(str_loss_ood) - 1
+            rts_loss_ood = np.exp(rts_loss_ood) - 1
+        else:
+            # Use raw accuracies/similarities
+            str_sim_id = np.mean(np.diag(str_rec_id))
+            str_sim_ood = np.mean(np.diag(str_rec_ood))
+            
+            # Convert to losses
+            str_loss_id = 1 - str_sim_id  # Linear penalty for ID
+            str_loss_ood = np.exp(2 * (1 - str_sim_ood)) - 1  # Exponential penalty for OOD
+            
+            # Compute raw accuracies from confusion matrices
+            rts_acc_id = np.sum(np.diag(conf_id)) / (np.sum(conf_id) + 1e-10)
+            rts_acc_ood = np.sum(np.diag(conf_ood)) / (np.sum(conf_ood) + 1e-10)
+            rts_loss_id = 1 - rts_acc_id  # Linear penalty for ID
+            rts_loss_ood = np.exp(2 * (1 - rts_acc_ood)) - 1  # Exponential penalty for OOD
+        
+        # Handle failed computations
+        if np.isnan(str_loss_id) or np.isnan(str_loss_ood) or np.isnan(rts_loss_id) or np.isnan(rts_loss_ood):
+            return 10.0
+        
+        # Weight ID/OOD (with exponential OOD penalty for both cases)
+        str_rec_loss = 0.25 * str_loss_id + 0.75 * str_loss_ood
+        rts_loss = 0.25 * rts_loss_id + 0.75 * rts_loss_ood
+        
+        # Equal weighting between StR-rec and RtS
+        loss = 0.5 * str_rec_loss + 0.5 * rts_loss
+        
         return loss
         
     except Exception as e:
         print(f"Error in loss computation: {str(e)}")
-        return float('inf')
+        return 10.0  # Large but finite penalty
 
-def objective_mnist(trial):
+def objective_mnist(trial, use_frobenius=True):
     """Objective function for MNIST optimization."""
     # Sample hyperparameters
     net_config = NetworkConfig(
@@ -146,11 +139,11 @@ def objective_mnist(trial):
     results_dict = np.load(os.path.join(run_dir, 'results.npy'), allow_pickle=True).item()
     
     # Compute single combined loss
-    loss = compute_mnist_loss(results_dict)
+    loss = compute_mnist_loss(results_dict, use_frobenius)
     
     return loss
 
-def objective_colored_mnist(trial):
+def objective_colored_mnist(trial, use_frobenius=True):
     """Objective function for colored MNIST optimization."""
     # Sample hyperparameters
     net_config = NetworkConfig(
@@ -177,11 +170,11 @@ def objective_colored_mnist(trial):
     train_indices = results_dict['train_indices']
     
     # Compute single combined loss
-    loss = compute_colored_mnist_loss(results_dict, train_indices)
+    loss = compute_colored_mnist_loss(results_dict, train_indices, use_frobenius)
     
     return loss
 
-def run_optuna_experiment(experiment_type, n_trials=100, study_name=None):
+def run_optuna_experiment(experiment_type, n_trials=100, study_name=None, use_frobenius=True, initial_params=None):
     """Run Optuna experiment for either MNIST or colored MNIST."""
     if study_name is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -202,6 +195,10 @@ def run_optuna_experiment(experiment_type, n_trials=100, study_name=None):
             constant_liar=True  # Enable constant liar to improve parallel optimization
         )
     )
+    
+    # If initial parameters are provided and this is a new study, create a trial with those parameters
+    if initial_params is not None and len(study.trials) == 0:
+        study.enqueue_trial(initial_params)
     
     # Create callback to track best value
     best_values = []
@@ -226,7 +223,12 @@ def run_optuna_experiment(experiment_type, n_trials=100, study_name=None):
     # Run optimization with callback
     print(f"\nStarting optimization for {experiment_type}...")
     objective = objective_mnist if experiment_type == 'mnist' else objective_colored_mnist
-    study.optimize(objective, n_trials=n_trials, callbacks=[track_best_value])
+    
+    # Create partial function with use_frobenius
+    from functools import partial
+    objective_with_loss = partial(objective, use_frobenius=use_frobenius)
+    
+    study.optimize(objective_with_loss, n_trials=n_trials, callbacks=[track_best_value])
     
     # Save study statistics
     study_stats = {
@@ -241,7 +243,8 @@ def run_optuna_experiment(experiment_type, n_trials=100, study_name=None):
         'n_trials': len(study.trials),
         'n_complete': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
         'n_pruned': len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]),
-        'best_value_history': best_values  # Add best value history
+        'best_value_history': best_values,  # Add best value history
+        'use_frobenius': use_frobenius  # Save loss type used
     }
     
     # Print optimization summary
@@ -283,16 +286,25 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--experiment', type=str, choices=['mnist', 'colored_mnist'], required=True)
     parser.add_argument('--n_trials', type=int, default=2)
-    parser.add_argument('--continue_from', type=str, help='Directory of previous study to continue from')
+    parser.add_argument('--continue_from', type=str, help='Path to previous study.db to continue from')
+    parser.add_argument('--use_frobenius', action='store_true', help='Use Frobenius norm based loss instead of raw accuracies')
+    parser.add_argument('--study_name', type=str, help='Specific name for the study (overrides automatic timestamp)')
+    parser.add_argument('--initial_params_file', type=str, help='JSON file containing initial parameters for the study')
     args = parser.parse_args()
     
+    # Load initial parameters if provided
+    initial_params = None
+    if args.initial_params_file:
+        with open(args.initial_params_file, 'r') as f:
+            initial_params = json.load(f)
+    
     if args.continue_from:
-        # Extract timestamp from the previous study directory
-        study_name = os.path.basename(args.continue_from)
+        # Extract study name from the previous study directory
+        study_name = os.path.basename(os.path.dirname(args.continue_from))
         print(f"\nContinuing optimization from {study_name}...")
-        study, stats, results_dir = run_optuna_experiment(args.experiment, args.n_trials, study_name=study_name)
+        study, stats, results_dir = run_optuna_experiment(args.experiment, args.n_trials, study_name=study_name, use_frobenius=args.use_frobenius)
     else:
-        study, stats, results_dir = run_optuna_experiment(args.experiment, args.n_trials)
+        study, stats, results_dir = run_optuna_experiment(args.experiment, args.n_trials, study_name=args.study_name, use_frobenius=args.use_frobenius, initial_params=initial_params)
     
     print(f"\nOptimization completed. Results saved in {results_dir}")
     print("\nBest trial:")

@@ -1,5 +1,5 @@
 instructions.md 
 results/
-**/__pycache__/
-**/*.pyc
-.DS_Store 
+__pycache__/
+.DS_Store
+*.pyc 

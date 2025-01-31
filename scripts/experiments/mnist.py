@@ -200,13 +200,17 @@ def train_hebbian_mnist(net_config, train_config):
     
     # Save confusion matrices
     plot_confusion_matrix(train_conf_rts, os.path.join(run_dir, 'train_confusion_rts.png'),
-                         title='Training Confusion Matrix (RtS)', normalize=True)
+                         title='Training Confusion Matrix (RtS)', normalize=True,
+                         title_prefix="MNIST: ")
     plot_confusion_matrix(test_conf_rts, os.path.join(run_dir, 'test_confusion_rts.png'),
-                         title='Test Confusion Matrix (RtS)', normalize=True)
+                         title='Test Confusion Matrix (RtS)', normalize=True,
+                         title_prefix="MNIST: ")
     plot_confusion_matrix(train_conf_decoder, os.path.join(run_dir, 'train_confusion_decoder.png'),
-                         title='Training Confusion Matrix (Decoder)', normalize=True)
+                         title='Training Confusion Matrix (Decoder)', normalize=True,
+                         title_prefix="MNIST: ")
     plot_confusion_matrix(test_conf_decoder, os.path.join(run_dir, 'test_confusion_decoder.png'),
-                         title='Test Confusion Matrix (Decoder)', normalize=True)
+                         title='Test Confusion Matrix (Decoder)', normalize=True,
+                         title_prefix="MNIST: ")
     
     # Print and save results
     print(f"\nResults:")
@@ -242,7 +246,8 @@ def train_hebbian_mnist(net_config, train_config):
     plot_similarity_matrix(
         similarity_matrix,
         os.path.join(run_dir, 'str_rep_similarity.png'),
-        title="StR-rep Similarity Matrix"
+        title="StR-rep Similarity Matrix",
+        title_prefix="MNIST: "
     )
     
     # Compute StR-rec reconstructions
@@ -269,14 +274,16 @@ def train_hebbian_mnist(net_config, train_config):
     plot_reconstructions(
         reconstructions,
         class_averages,
-        os.path.join(run_dir, 'str_rec_reconstructions.png')
+        os.path.join(run_dir, 'str_rec_reconstructions.png'),
+        title_prefix="MNIST: "
     )
     
     # Plot reconstruction similarity matrix
     plot_reconstruction_similarity_matrix(
         reconstructions,
         class_averages,
-        os.path.join(run_dir, 'str_rec_similarity.png')
+        os.path.join(run_dir, 'str_rec_similarity.png'),
+        title_prefix="MNIST: "
     )
     
     # Save summary
