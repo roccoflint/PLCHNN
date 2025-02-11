@@ -1,0 +1,11 @@
+{
+    "hidden_size": 324,
+    "p": 3,
+    "k": 7,
+    "delta": 0.4,
+    "signific_p_multiplier": 1.0,
+    "allow_pathway_interaction": true,
+    "n_epochs": 20,
+    "batch_size": 100,
+    "learning_rate": 0.04
+}

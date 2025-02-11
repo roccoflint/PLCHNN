@@ -203,9 +203,12 @@ class HebbianNetwork:
                         # Handle colored MNIST case
                         color_pattern = signific_pattern[:, n_digits:]
                         color_targets = self.xp.argmax(color_pattern, axis=1) + n_digits
-                        # Split +1.0 between digit and color
-                        yl[digit_targets, batch_indices] = 0.5
-                        yl[color_targets, batch_indices] = 0.5
+                        # # For split one hot enocidng:
+                        # yl[digit_targets, batch_indices] = 0.5
+                        # yl[color_targets, batch_indices] = 0.5
+                        # For two hote encoding:
+                        yl[digit_targets, batch_indices] = 1.0
+                        yl[color_targets, batch_indices] = 1.0
                         # Create mask for all positions except the target digit-color pair
                         mask = self.xp.ones_like(tot_input, dtype=bool)
                         mask[digit_targets, batch_indices] = False

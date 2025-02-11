@@ -12,11 +12,11 @@ except ImportError:
 
 from core.network import HebbianNetwork, to_device
 from core.utils import (
-    load_mnist, get_minibatch, visualize_weights,
+    load_mnist, get_minibatch,
     compute_class_averages, plot_similarity_matrix,
     cosine_similarity, plot_reconstructions, plot_confusion_matrix,
     plot_reconstruction_similarity_matrix, save_experiment_metrics,
-    frobenius_norm_from_identity, compute_gmcc
+    frobenius_norm_from_identity, set_random_seed, ssim
 )
 from core.config import NetworkConfig, TrainingConfig
 import matplotlib.pyplot as plt
@@ -24,30 +24,11 @@ from tqdm import tqdm, trange
 import scipy.io
 from datetime import datetime
 import argparse
-from core.stats import test_accuracy, test_gmcc, test_frobenius, format_metric
+from core.stats import test_accuracy, test_frobenius, format_metric
+from core.kh_decoder import Decoder
+from core.simple_decoder import SimpleDecoder
 
-def format_gmcc(value, n_samples):
-    """Format GMCC with significance stars."""
-    if value is None:
-        return "N/A"
-    p_value = test_gmcc(value, n_samples)
-    return format_metric(value, p_value)
-
-class SimpleDecoder:
-    """Linear classifier for evaluation."""
-    def __init__(self):
-        self.W = None
-        
-    def fit(self, X, y):
-        Y = np.zeros((len(y), 10))
-        Y[np.arange(len(y)), y] = 1
-        self.W = np.linalg.pinv(X) @ Y
-        
-    def predict(self, X):
-        return np.argmax(X @ self.W, axis=1)
-    
-    def score(self, X, y):
-        return np.mean(self.predict(X) == y)
+set_random_seed()
 
 def visualize_weights(net):
     """Visualize weights of first layer as MNIST digits."""
@@ -150,14 +131,14 @@ def train_hebbian_mnist(net_config, train_config):
     train_repr = []
     for i in trange(0, len(M), train_config.eval_batch_size, desc="Computing train representations"):
         batch = M[i:i+train_config.eval_batch_size]
-        h = to_device(net.forward(batch), 'cpu').T
+        h = to_device(net._get_hidden_activations(batch, is_signific=False)[-1], 'cpu')
         train_repr.append(h)
     train_repr = np.vstack(train_repr)
     
     test_repr = []
     for i in trange(0, len(M_test), train_config.eval_batch_size, desc="Computing test representations"):
         batch = M_test[i:i+train_config.eval_batch_size]
-        h = to_device(net.forward(batch), 'cpu').T
+        h = to_device(net._get_hidden_activations(batch, is_signific=False)[-1], 'cpu')
         test_repr.append(h)
     test_repr = np.vstack(test_repr)
     
@@ -167,6 +148,7 @@ def train_hebbian_mnist(net_config, train_config):
     
     # Train decoder
     print("Training decoder...")
+    # decoder = Decoder(input_dim=net_config.layer_sizes[-1], output_dim=10)
     decoder = SimpleDecoder()
     decoder.fit(train_repr, labels_cpu)
     
@@ -200,17 +182,13 @@ def train_hebbian_mnist(net_config, train_config):
     
     # Save confusion matrices
     plot_confusion_matrix(train_conf_rts, os.path.join(run_dir, 'train_confusion_rts.png'),
-                         title='Training Confusion Matrix (RtS)', normalize=True,
-                         title_prefix="MNIST: ")
+                         normalize=True, title_prefix="MNIST: ")
     plot_confusion_matrix(test_conf_rts, os.path.join(run_dir, 'test_confusion_rts.png'),
-                         title='Test Confusion Matrix (RtS)', normalize=True,
-                         title_prefix="MNIST: ")
+                         normalize=True, title_prefix="MNIST: ")
     plot_confusion_matrix(train_conf_decoder, os.path.join(run_dir, 'train_confusion_decoder.png'),
-                         title='Training Confusion Matrix (Decoder)', normalize=True,
-                         title_prefix="MNIST: ")
+                         normalize=True, title_prefix="MNIST: ")
     plot_confusion_matrix(test_conf_decoder, os.path.join(run_dir, 'test_confusion_decoder.png'),
-                         title='Test Confusion Matrix (Decoder)', normalize=True,
-                         title_prefix="MNIST: ")
+                         normalize=True, title_prefix="MNIST: ")
     
     # Print and save results
     print(f"\nResults:")
@@ -253,23 +231,23 @@ def train_hebbian_mnist(net_config, train_config):
     # Compute StR-rec reconstructions
     print("\nComputing StR-rec reconstructions...")
     reconstructions = []
-    reconstruction_similarities = []
     for i in trange(10, desc="Computing reconstructions"):
-        # Get reconstruction for each class
         recon = net.str_rec(signific_inputs[i:i+1])
         reconstructions.append(recon[0])
-        
-        # Compare with class average
-        sim = cosine_similarity(
-            [recon],
-            [class_averages[i:i+1].reshape(1, -1)],  # Add reshape to match colored MNIST
-            xp=cp if HAS_CUDA else np
-        )
-        reconstruction_similarities.append(float(to_device(sim, 'cpu')))
-    
-    # Stack reconstructions
     reconstructions = cp.stack(reconstructions) if HAS_CUDA else np.stack(reconstructions)
-    
+
+    # Compute StR-rec similarity matrix using SSIM
+    str_rec_matrix = np.zeros((10, 10))
+    for i in range(10):
+        recon_i = to_device(reconstructions[i], 'cpu').reshape(28, 28)
+        for j in range(10):
+            avg_j = to_device(class_averages[j], 'cpu').reshape(28, 28)
+            str_rec_matrix[i, j] = ssim(recon_i, avg_j, data_range=1.0)
+
+    # Compute str-rec diagonal and off-diagonal means
+    str_rec_diag_sim = np.diag(str_rec_matrix).mean()
+    str_rec_off_diag_sim = str_rec_matrix[~np.eye(str_rec_matrix.shape[0], dtype=bool)].mean()
+
     # Plot reconstructions vs class averages
     plot_reconstructions(
         reconstructions,
@@ -314,17 +292,8 @@ def train_hebbian_mnist(net_config, train_config):
         # StR-rec metrics
         f.write("StR-rec Metrics:\n")
         f.write("---------------\n")
-        str_rec_matrix = np.zeros((10, 10))
-        # Compute full similarity matrix for reconstructions
-        for i in range(10):
-            for j in range(10):
-                sim = cosine_similarity(
-                    [to_device(reconstructions[i:i+1], 'cpu')],
-                    [to_device(class_averages[j:j+1].reshape(1, -1), 'cpu')],  # Add reshape to match colored MNIST
-                    xp=np
-                )
-                str_rec_matrix[i, j] = float(sim)
-        
+        f.write(f"StR-rec Diagonal Similarity: {str_rec_diag_sim:.4f}\n")
+        f.write(f"StR-rec Off-diagonal Similarity: {str_rec_off_diag_sim:.4f}\n")
         str_rec_fn = frobenius_norm_from_identity(str_rec_matrix, return_numpy=True)
         str_rec_fn_p = test_frobenius(str_rec_fn, 10)
         
@@ -346,16 +315,16 @@ def train_hebbian_mnist(net_config, train_config):
         f.write("Classification Metrics:\n")
         f.write("---------------------\n")
         
-        # Compute GMCCs
-        train_gmcc_rts = compute_gmcc(train_conf_rts)
-        test_gmcc_rts = compute_gmcc(test_conf_rts)
-        train_gmcc_decoder = compute_gmcc(train_conf_decoder)
-        test_gmcc_decoder = compute_gmcc(test_conf_decoder)
+        # # Compute GMCCs
+        # train_gmcc_rts = compute_gmcc(train_conf_rts)
+        # test_gmcc_rts = compute_gmcc(test_conf_rts)
+        # train_gmcc_decoder = compute_gmcc(train_conf_decoder)
+        # test_gmcc_decoder = compute_gmcc(test_conf_decoder)
         
-        f.write(f"RtS Train GMCC: {format_gmcc(train_gmcc_rts, len(M))}\n")
-        f.write(f"RtS Test GMCC: {format_gmcc(test_gmcc_rts, len(M_test))}\n")
-        f.write(f"Decoder Train GMCC: {format_gmcc(train_gmcc_decoder, len(M))}\n")
-        f.write(f"Decoder Test GMCC: {format_gmcc(test_gmcc_decoder, len(M_test))}\n")
+        # f.write(f"RtS Train GMCC: {format_gmcc(train_gmcc_rts, len(M))}\n")
+        # f.write(f"RtS Test GMCC: {format_gmcc(test_gmcc_rts, len(M_test))}\n")
+        # f.write(f"Decoder Train GMCC: {format_gmcc(train_gmcc_decoder, len(M))}\n")
+        # f.write(f"Decoder Test GMCC: {format_gmcc(test_gmcc_decoder, len(M_test))}\n")
         f.write(f"RtS Train Accuracy: {format_metric(train_acc_rts, train_acc_rts_p)}\n")
         f.write(f"RtS Test Accuracy: {format_metric(test_acc_rts, test_acc_rts_p)}\n")
         f.write(f"Decoder Train Accuracy: {format_metric(train_acc_decoder, train_acc_decoder_p)}\n")
@@ -413,7 +382,7 @@ def train_hebbian_mnist(net_config, train_config):
         'test_conf_rts': test_conf_rts,
         'str_rep_similarity': to_device(similarity_matrix, 'cpu'),
         'str_rec_reconstructions': to_device(reconstructions, 'cpu'),
-        'str_rec_similarities': reconstruction_similarities,
+        'str_rec_similarities': str_rec_matrix.flatten(),
         'str_rec_matrix': to_device(str_rec_matrix, 'cpu')  # Add full StR-rec similarity matrix
     }
     np.save(os.path.join(run_dir, 'results.npy'), results)
@@ -425,6 +394,7 @@ def train_hebbian_mnist(net_config, train_config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--hidden_size', type=int, default=100)
     parser.add_argument('--p', type=float, default=3.0)
     parser.add_argument('--k', type=int, default=7)
@@ -435,6 +405,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=0.02)
     args = parser.parse_args()
+    
+    set_random_seed(args.seed)
     
     net_config = NetworkConfig(
         hidden_sizes=args.hidden_size,

@@ -13,11 +13,11 @@ except ImportError:
 from core.network import HebbianNetwork, to_device
 from core.utils import (
     load_mnist, compute_confusion_matrix, plot_confusion_matrix,
-    plot_reconstructions,
-    plot_reconstruction_similarity_matrix, cosine_similarity,
-    visualize_weights, multichannel_to_rgb, COLORS, COLOR_LABELS, ColoredMNIST,
+    plot_reconstructions, plot_ood_reconstructions,
+    plot_reconstruction_similarity_matrix, cosine_similarity, multichannel_to_rgb, COLORS, COLOR_LABELS, ColoredMNIST,
     CompositionTracker, compute_class_averages, plot_similarity_matrix,
-    save_experiment_metrics, frobenius_norm_from_identity, compute_gmcc
+    save_experiment_metrics, frobenius_norm_from_identity,
+    set_random_seed
 )
 from core.config import NetworkConfig, TrainingConfig
 import scipy.io
@@ -26,62 +26,67 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import argparse
 from core.stats import test_accuracy, test_gmcc, test_frobenius, format_metric
+from core.kh_decoder import Decoder
+from core.simple_decoder import SimpleDecoder
+from skimage.metrics import structural_similarity as ssim
 
-# Define RGB values for each color
-COLORS = {
-    3: np.array([  # RGB values for 3 colors
-        [1.0, 0.0, 0.0],  # Red
-        [0.0, 0.0, 1.0],  # Blue
-        [0.0, 0.8, 0.0],  # Green
-    ]),
-    5: np.array([  # RGB values for 5 colors
-        [1.0, 0.0, 0.0],  # Red
-        [0.0, 0.0, 1.0],  # Blue
-        [0.0, 0.8, 0.0],  # Green
-        [0.8, 0.0, 0.8],  # Purple
-        [1.0, 0.6, 0.0],  # Orange
-    ])
-}
+set_random_seed()
 
-def multichannel_to_rgb(data, n_colors):
-    """Convert multi-channel representation to RGB image.
+# # Define RGB values for each color
+# COLORS = {
+#     3: np.array([  # RGB values for 3 colors
+#         [1.0, 0.0, 0.0],  # Red
+#         [0.0, 0.0, 1.0],  # Blue
+#         [0.0, 1.0, 0.0],  # Green
+#     ]),
+#     5: np.array([  # RGB values for 5 colors
+#         [1.0, 0.0, 0.0],  # Red
+#         [0.0, 0.0, 1.0],  # Blue
+#         [0.0, 0.8, 0.0],  # Green
+#         [0.8, 0.0, 0.8],  # Purple
+#         [1.0, 0.6, 0.0],  # Orange
+#     ])
+# }
+
+# def multichannel_to_rgb(data, n_colors):
+#     """Convert multi-channel representation to RGB image.
     
-    Args:
-        data: Array of shape (784 * (1 + n_colors),) or (batch_size, 784 * (1 + n_colors))
-        n_colors: Number of colors used in the dataset
+#     Args:
+#         data: Array of shape (784 * (1 + n_colors),) or (batch_size, 784 * (1 + n_colors))
+#         n_colors: Number of colors used in the dataset
         
-    Returns:
-        Array of shape (28, 28, 3) or (batch_size, 28, 28, 3) containing RGB values
-    """
-    if data.ndim == 1:
-        data = data.reshape(1, -1)
+#     Returns:
+#         Array of shape (28, 28, 3) or (batch_size, 28, 28, 3) containing RGB values
+#     """
+#     if data.ndim == 1:
+#         data = data.reshape(1, -1)
     
-    batch_size = data.shape[0]
-    xp = cp if isinstance(data, cp.ndarray) else np
-    colors = to_device(COLORS[n_colors], data.device if hasattr(data, 'device') else 'cpu')
+#     batch_size = data.shape[0]
+#     xp = cp if isinstance(data, cp.ndarray) else np
+#     colors = to_device(COLORS[n_colors], data.device if hasattr(data, 'device') else 'cpu')
     
-    # Extract intensity and color channels
-    intensity = data[:, :784].reshape(batch_size, 28, 28)
-    color_channels = [
-        data[:, (784 * (i + 1)):(784 * (i + 2))].reshape(batch_size, 28, 28)
-        for i in range(n_colors)
-    ]
+#     # Extract intensity and color channels
+#     intensity = data[:, :784].reshape(batch_size, 28, 28)
+#     color_channels = [
+#         data[:, (784 * (i + 1)):(784 * (i + 2))].reshape(batch_size, 28, 28)
+#         for i in range(n_colors)
+#     ]
     
-    # Initialize RGB output
-    rgb = xp.zeros((batch_size, 28, 28, 3))
+#     # Initialize RGB output
+#     rgb = xp.zeros((batch_size, 28, 28, 3))
     
-    # Combine channels using color mapping
-    for i, color_channel in enumerate(color_channels):
-        for j in range(3):  # RGB channels
-            rgb[:, :, :, j] += color_channel * colors[i, j]
+#     # Combine channels using color mapping
+#     for i, color_channel in enumerate(color_channels):
+#         for j in range(3):  # RGB channels
+#             rgb[:, :, :, j] += color_channel * colors[i, j]
     
-    # Scale by intensity
-    rgb = rgb * intensity.reshape(batch_size, 28, 28, 1)
+#     # Scale by intensity
+#     rgb = rgb * intensity.reshape(batch_size, 28, 28, 1)
     
-    # Ensure values are in [0, 1]
-    rgb = xp.clip(rgb, 0, 1)
+#     # Ensure values are in [0, 1]
+#     rgb = xp.clip(rgb, 0, 1)
     
-    return rgb[0] if data.shape[0] == 1 else rgb
+#     return rgb[0] if data.shape[0] == 1 else rgb
 
 def visualize_colored_digits(data, labels, n_colors, n_samples=10):
     """Visualize colored MNIST digits.
@@ -173,7 +178,7 @@ def generate_colored_mnist(n_colors=3, device='cpu', include_signific=True, hold
     # Generate holdout pairs if none specified
     if holdout_pairs is None:
         # Create list of available digits starting from 9
-        available_digits = list(range(9, -1, -2))  # [9, 7, 5, 3, 1]
+        available_digits = list(range(9, -1, -1))  # [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
         
         # Generate holdout pairs by alternating through colors
         holdout_pairs = []
@@ -374,23 +379,6 @@ def compute_component_averages(data, labels, n_colors):
     
     return digit_averages, color_averages
 
-class SimpleDecoder:
-    """Linear classifier for evaluation."""
-    def __init__(self):
-        self.W = None
-        
-    def fit(self, X, y):
-        n_classes = int(y.max()) + 1  # Convert to int
-        Y = np.zeros((len(y), n_classes))
-        Y[np.arange(len(y)), y.astype(int)] = 1  # Ensure indices are integers
-        self.W = np.linalg.pinv(X) @ Y
-        
-    def predict(self, X):
-        return np.argmax(X @ self.W, axis=1)
-    
-    def score(self, X, y):
-        return np.mean(self.predict(X) == y)
-
 def format_gmcc(value, n_samples):
     """Format GMCC with significance stars."""
     if value is None:
@@ -472,15 +460,21 @@ def train_hebbian_colored_mnist(net_config, train_config):
     train_repr = []
     for i in trange(0, len(train_data), train_config.eval_batch_size, desc="Computing train representations"):
         batch = train_data[i:i+train_config.eval_batch_size]
-        h = to_device(net.forward(batch), 'cpu').T
-        train_repr.append(h)
+        # Get hidden layer activations instead of signific layer
+        h = x = batch
+        for layer in net.layers:
+            h = layer.forward(h).T
+        train_repr.append(to_device(h, 'cpu'))
     train_repr = np.vstack(train_repr)
     
     test_repr = []
     for i in trange(0, len(test_data), train_config.eval_batch_size, desc="Computing test representations"):
         batch = test_data[i:i+train_config.eval_batch_size]
-        h = to_device(net.forward(batch), 'cpu').T
-        test_repr.append(h)
+        # Get hidden layer activations instead of signific layer
+        h = x = batch
+        for layer in net.layers:
+            h = layer.forward(h).T
+        test_repr.append(to_device(h, 'cpu'))
     test_repr = np.vstack(test_repr)
     
     # Move labels to CPU for evaluation
@@ -489,11 +483,13 @@ def train_hebbian_colored_mnist(net_config, train_config):
     
     # Train decoders for digits and colors
     print("Training decoders...")
+    # digit_decoder = Decoder(input_dim=net_config.layer_sizes[-1], output_dim=10)
     digit_decoder = SimpleDecoder()
-    digit_decoder.fit(train_repr, train_labels_cpu[:, 0])  # First column is digit
+    digit_decoder.fit(train_repr, train_labels_cpu[:, 0].astype(np.int64))  # First column is digit
     
+    # color_decoder = Decoder(input_dim=net_config.layer_sizes[-1], output_dim=net_config.n_colors)
     color_decoder = SimpleDecoder()
-    color_decoder.fit(train_repr, train_labels_cpu[:, 1])  # Second column is color
+    color_decoder.fit(train_repr, train_labels_cpu[:, 1].astype(np.int64))  # Second column is color
     
     # Get decoder accuracies
     print("Computing accuracies...")
@@ -501,7 +497,7 @@ def train_hebbian_colored_mnist(net_config, train_config):
     test_digit_acc_decoder = digit_decoder.score(test_repr, test_labels_cpu[:, 0])
     train_color_acc_decoder = color_decoder.score(train_repr, train_labels_cpu[:, 1])
     test_color_acc_decoder = color_decoder.score(test_repr, test_labels_cpu[:, 1])
-    
+  
     # Compute full accuracy (both digit and color correct)
     train_full_acc_decoder = np.mean(
         (digit_decoder.predict(train_repr) == train_labels_cpu[:, 0]) &
@@ -540,6 +536,33 @@ def train_hebbian_colored_mnist(net_config, train_config):
         if comp_idx in train_indices:
             test_id_mask[i] = True
     test_ood_mask = ~test_id_mask
+
+      
+    # Compute raw decoder accuracies (unconstrained)
+    raw_full_acc_decoder = np.mean(
+        (digit_decoder.predict(test_repr) == test_labels_cpu[:, 0]) &
+        (color_decoder.predict(test_repr) == test_labels_cpu[:, 1])
+    )
+    
+    raw_id_acc_decoder = np.mean(
+        (digit_decoder.predict(test_repr[test_id_mask]) == test_labels_cpu[test_id_mask, 0]) &
+        (color_decoder.predict(test_repr[test_id_mask]) == test_labels_cpu[test_id_mask, 1])
+    )
+    
+    raw_ood_acc_decoder = np.mean(
+        (digit_decoder.predict(test_repr[test_ood_mask]) == test_labels_cpu[test_ood_mask, 0]) &
+        (color_decoder.predict(test_repr[test_ood_mask]) == test_labels_cpu[test_ood_mask, 1])
+    )
+    
+    raw_digit_acc_decoder = np.mean(digit_decoder.predict(test_repr) == test_labels_cpu[:, 0])
+    raw_color_acc_decoder = np.mean(color_decoder.predict(test_repr) == test_labels_cpu[:, 1])
+    
+    raw_id_digit_acc_decoder = np.mean(digit_decoder.predict(test_repr[test_id_mask]) == test_labels_cpu[test_id_mask, 0])
+    raw_id_color_acc_decoder = np.mean(color_decoder.predict(test_repr[test_id_mask]) == test_labels_cpu[test_id_mask, 1])
+    
+    raw_ood_digit_acc_decoder = np.mean(digit_decoder.predict(test_repr[test_ood_mask]) == test_labels_cpu[test_ood_mask, 0])
+    raw_ood_color_acc_decoder = np.mean(color_decoder.predict(test_repr[test_ood_mask]) == test_labels_cpu[test_ood_mask, 1])
+    
     
     # Get RtS predictions for training data
     train_digit_preds = []
@@ -614,11 +637,10 @@ def train_hebbian_colored_mnist(net_config, train_config):
     
     # Plot unconstrained OOD confusion matrix
     plot_confusion_matrix(unconstrained_test_comp_conf_ood,
-                         os.path.join(run_dir, 'unconstrained_confusion_compositional_ood.png'),
-                         title='Unconstrained OOD Confusion Matrix (Compositional)',
-                         normalize=True, is_compositional=True,
-                         n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
+                        os.path.join(run_dir, 'unconstrained_confusion_compositional_ood.png'),
+                        normalize=True, is_compositional=True,
+                        n_colors=net_config.n_colors, train_indices=train_indices,
+                        title_prefix="Colored MNIST: ")
     
     # Get all possible OOD digits and colors once
     ood_digits = set(idx // net_config.n_colors for idx in ood_indices)
@@ -760,46 +782,46 @@ def train_hebbian_colored_mnist(net_config, train_config):
     test_comp_conf_decoder_id = test_comp_conf_decoder[id_indices][:, id_indices]
     test_comp_conf_decoder_ood = test_comp_conf_decoder[ood_indices][:, ood_indices]
     
-    # # Compute constrained predictions for both ID and OOD
-    # constrained_test_preds_rts_id = []
-    # constrained_test_preds_rts_ood = []
-    # constrained_test_preds_decoder_id = []
-    # constrained_test_preds_decoder_ood = []
+    # Compute constrained predictions for both ID and OOD
+    constrained_test_preds_rts_id = []
+    constrained_test_preds_rts_ood = []
+    constrained_test_preds_decoder_id = []
+    constrained_test_preds_decoder_ood = []
     
-    # # Get constrained RtS predictions
-    # for i in trange(0, len(test_data), eval_batch_size, desc="Computing constrained RtS predictions"):
-    #     batch = test_data[i:i+eval_batch_size]
-    #     # Get predictions using rts_classify
-    #     digit_pred, color_pred = net.rts_classify(batch, [10, net_config.n_colors])
+    # Get constrained RtS predictions
+    for i in trange(0, len(test_data), eval_batch_size, desc="Computing constrained RtS predictions"):
+        batch = test_data[i:i+eval_batch_size]
+        # Get predictions using rts_classify
+        digit_pred, color_pred = net.rts_classify(batch, [10, net_config.n_colors])
         
-    #     # Convert to CPU if needed
-    #     if HAS_CUDA:
-    #         digit_pred = cp.asnumpy(digit_pred)
-    #         color_pred = cp.asnumpy(color_pred)
+        # Convert to CPU if needed
+        if HAS_CUDA:
+            digit_pred = cp.asnumpy(digit_pred)
+            color_pred = cp.asnumpy(color_pred)
         
-    #     # For each sample, get predictions based on ID/OOD status
-    #     for j in range(len(batch)):
-    #         sample_idx = i + j
-    #         comp_idx = test_labels_cpu[sample_idx, 0] * net_config.n_colors + test_labels_cpu[sample_idx, 1]
+        # For each sample, get predictions based on ID/OOD status
+        for j in range(len(batch)):
+            sample_idx = i + j
+            comp_idx = test_labels_cpu[sample_idx, 0] * net_config.n_colors + test_labels_cpu[sample_idx, 1]
             
-    #         if comp_idx in id_indices:
-    #             # For ID samples, only consider ID digits/colors
-    #             if digit_pred[j] not in id_digits or color_pred[j] not in id_colors:
-    #                 # If prediction is not in ID set, pick closest valid ID prediction
-    #                 valid_digits = list(id_digits)
-    #                 valid_colors = list(id_colors)
-    #                 digit_pred[j] = valid_digits[0]  # Default to first valid digit
-    #                 color_pred[j] = valid_colors[0]  # Default to first valid color
-    #             constrained_test_preds_rts_id.append(digit_pred[j] * net_config.n_colors + color_pred[j])
-    #         else:
-    #             # For OOD samples, only consider OOD digits/colors
-    #             if digit_pred[j] not in ood_digits or color_pred[j] not in ood_colors:
-    #                 # If prediction is not in OOD set, pick closest valid OOD prediction
-    #                 valid_digits = list(ood_digits)
-    #                 valid_colors = list(ood_colors)
-    #                 digit_pred[j] = valid_digits[0]  # Default to first valid digit
-    #                 color_pred[j] = valid_colors[0]  # Default to first valid color
-    #             constrained_test_preds_rts_ood.append(digit_pred[j] * net_config.n_colors + color_pred[j])
+            if comp_idx in id_indices:
+                # For ID samples, only consider ID digits/colors
+                if digit_pred[j] not in id_digits or color_pred[j] not in id_colors:
+                    # If prediction is not in ID set, pick closest valid ID prediction
+                    valid_digits = list(id_digits)
+                    valid_colors = list(id_colors)
+                    digit_pred[j] = valid_digits[0]  # Default to first valid digit
+                    color_pred[j] = valid_colors[0]  # Default to first valid color
+                constrained_test_preds_rts_id.append(digit_pred[j] * net_config.n_colors + color_pred[j])
+            else:
+                # For OOD samples, only consider OOD digits/colors
+                if digit_pred[j] not in ood_digits or color_pred[j] not in ood_colors:
+                    # If prediction is not in OOD set, pick closest valid OOD prediction
+                    valid_digits = list(ood_digits)
+                    valid_colors = list(ood_colors)
+                    digit_pred[j] = valid_digits[0]  # Default to first valid digit
+                    color_pred[j] = valid_colors[0]  # Default to first valid color
+                constrained_test_preds_rts_ood.append(digit_pred[j] * net_config.n_colors + color_pred[j])
     
     # # Get constrained decoder predictions
     # for i in trange(0, len(test_data), eval_batch_size, desc="Computing constrained decoder predictions"):
@@ -876,73 +898,57 @@ def train_hebbian_colored_mnist(net_config, train_config):
     #     np.array(constrained_test_preds_decoder_ood),
     #     num_classes=net_config.n_colors * 10
     # )[ood_indices][:, ood_indices]
+
+    # Before selecting OOD indices, normalize the full matrix
+    row_sums = unconstrained_test_comp_conf.sum(axis=1, keepdims=True)
+    normalized_full_conf = unconstrained_test_comp_conf / row_sums
+    # Then select OOD portion
+    normalized_ood_conf = normalized_full_conf[ood_indices][:, ood_indices]
     
     # Save confusion matrices
+    # Plot WITHOUT additional normalization
+    plot_confusion_matrix(normalized_ood_conf,
+                        os.path.join(run_dir, 'full_normalized_confusion_compositional_ood.png'),
+                        normalize=False,  # Important: don't normalize again
+                        is_compositional=True,
+                        n_colors=net_config.n_colors,
+                        train_indices=train_indices,
+                        title_prefix="Colored MNIST: ")
     plot_confusion_matrix(train_digit_conf_rts, os.path.join(run_dir, 'rts_confusion_digit_train.png'),
-                         title='ID Confusion Matrix (Digits, RtS)', normalize=True,
-                         title_prefix="Colored MNIST: ")
+                         normalize=True, title_prefix="Colored MNIST: ")
     plot_confusion_matrix(train_color_conf_rts, os.path.join(run_dir, 'rts_confusion_color_train.png'),
-                         title='ID Confusion Matrix (Colors, RtS)', normalize=True, is_color=True, 
-                         n_colors=net_config.n_colors, title_prefix="Colored MNIST: ")
+                         normalize=True, is_color=True, n_colors=net_config.n_colors, title_prefix="Colored MNIST: ")
     plot_confusion_matrix(test_digit_conf_rts, os.path.join(run_dir, 'rts_confusion_digit_test.png'),
-                         title='OOD Confusion Matrix (Digits, RtS)', normalize=True,
-                         title_prefix="Colored MNIST: ")
+                         normalize=True, title_prefix="Colored MNIST: ")
     plot_confusion_matrix(test_color_conf_rts, os.path.join(run_dir, 'rts_confusion_color_test.png'),
-                         title='OOD Confusion Matrix (Colors, RtS)', normalize=True, is_color=True, 
-                         n_colors=net_config.n_colors, title_prefix="Colored MNIST: ")
+                         normalize=True, is_color=True, n_colors=net_config.n_colors, title_prefix="Colored MNIST: ")
     
     # Plot full compositional confusion matrices (all compositions)
     plot_confusion_matrix(test_comp_conf_rts, os.path.join(run_dir, 'rts_confusion_compositional_all.png'),
-                         title='ID & OOD Confusion Matrix (Compositional, RtS)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors, 
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     plot_confusion_matrix(test_comp_conf_decoder, os.path.join(run_dir, 'decoder_confusion_compositional_all.png'),
-                         title='ID & OOD Confusion Matrix (Compositional, Decoder)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors,
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     # Plot ID confusion matrices
     plot_confusion_matrix(test_comp_conf_rts_id, os.path.join(run_dir, 'rts_confusion_compositional_id.png'),
-                         title='ID Confusion Matrix (Compositional, RtS)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
-    
-    # plot_confusion_matrix(constrained_test_comp_conf_rts_id, os.path.join(run_dir, 'constrained_id_confusion_compositional_rts.png'),
-    #                      title='Constrained ID Confusion Matrix (Compositional, RtS)', normalize=True,
-    #                      is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-    #                      title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors,
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     plot_confusion_matrix(test_comp_conf_decoder_id, os.path.join(run_dir, 'decoder_confusion_compositional_id.png'),
-                         title='ID Confusion Matrix (Compositional, Decoder)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
-    
-    # plot_confusion_matrix(constrained_test_comp_conf_decoder_id, os.path.join(run_dir, 'constrained_id_confusion_compositional_decoder.png'),
-    #                      title='Constrained ID Confusion Matrix (Compositional, Decoder)', normalize=True,
-    #                      is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-    #                      title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors,
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     # Plot OOD confusion matrices
     plot_confusion_matrix(test_comp_conf_rts_ood, os.path.join(run_dir, 'rts_confusion_compositional_ood.png'),
-                         title='OOD Confusion Matrix (Compositional, RtS)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
-    
-    # plot_confusion_matrix(constrained_test_comp_conf_rts_ood, os.path.join(run_dir, 'constrained_ood_confusion_compositional_rts.png'),
-    #                      title='Constrained OOD Confusion Matrix (Compositional, RtS)', normalize=True,
-    #                      is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-    #                      title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors,
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     plot_confusion_matrix(test_comp_conf_decoder_ood, os.path.join(run_dir, 'decoder_confusion_compositional_ood.png'),
-                         title='OOD Confusion Matrix (Compositional, Decoder)', normalize=True,
-                         is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-                         title_prefix="Colored MNIST: ")
-    
-    # plot_confusion_matrix(constrained_test_comp_conf_decoder_ood, os.path.join(run_dir, 'constrained_ood_confusion_compositional_decoder.png'),
-    #                      title='Constrained OOD Confusion Matrix (Compositional, Decoder)', normalize=True,
-    #                      is_compositional=True, n_colors=net_config.n_colors, train_indices=train_indices,
-    #                      title_prefix="Colored MNIST: ")
+                         normalize=True, is_compositional=True, n_colors=net_config.n_colors,
+                         train_indices=train_indices, title_prefix="Colored MNIST: ")
     
     # After computing compositional class averages...
     print("\nComputing compositional class averages...")
@@ -984,13 +990,19 @@ def train_hebbian_colored_mnist(net_config, train_config):
             recon = net.str_rec(signific_inputs[i:i+1])
             reconstructions.append(recon[0])
             
-            # Compare with class average
-            sim = cosine_similarity(
-                [recon],
-                [class_averages[(digit, color)].reshape(1, -1)],
-                xp=cp if HAS_CUDA else np
-            )
-            reconstruction_similarities.append(float(to_device(sim, 'cpu')))
+            # Compare with class average using SSIM
+            recon_img = to_device(recon[0], 'cpu')
+            if isinstance(recon_img, cp.ndarray):
+                recon_img = cp.asnumpy(recon_img)
+            recon_img = recon_img.reshape(28, 28, -1)
+            
+            avg_img = to_device(class_averages[(digit, color)], 'cpu')
+            if isinstance(avg_img, cp.ndarray):
+                avg_img = cp.asnumpy(avg_img)
+            avg_img = avg_img.reshape(28, 28, -1)
+            
+            sim = ssim(recon_img, avg_img, data_range=1.0, channel_axis=2)  # Use channel_axis for colored images
+            reconstruction_similarities.append(float(sim))
 
     # Stack reconstructions
     reconstructions = cp.stack(reconstructions) if HAS_CUDA else np.stack(reconstructions)
@@ -1007,13 +1019,51 @@ def train_hebbian_colored_mnist(net_config, train_config):
     plot_reconstructions(reconstructions, class_averages_list, os.path.join(run_dir, 'str_reconstructions.png'),
                         n_colors=net_config.n_colors, train_indices=train_indices,
                         title_prefix="Colored MNIST: ")
+    
+    # Plot OOD reconstructions
+    plot_ood_reconstructions(reconstructions, class_averages_list, os.path.join(run_dir, 'str_ood_reconstructions.png'),
+                           n_colors=net_config.n_colors, train_indices=train_indices,
+                           title_prefix="Colored MNIST: ")
 
     # Plot reconstruction similarity matrices
     plot_reconstruction_similarity_matrix(reconstructions, class_averages_list, os.path.join(run_dir, 'str-rec_association_compositional_test.png'),
                                             n_colors=net_config.n_colors, train_indices=train_indices,
                                             title_prefix="Colored MNIST: ")
     
-    # Save summary
+    # Compute Str-rec Similarity Metrics
+    str_rec_matrix = np.zeros((10 * net_config.n_colors, 10 * net_config.n_colors))
+    for i in range(10 * net_config.n_colors):
+        recon_i = to_device(reconstructions[i], 'cpu')
+        if isinstance(recon_i, cp.ndarray):
+            recon_i = cp.asnumpy(recon_i)
+        recon_i = recon_i.reshape(28, 28, -1)
+        
+        for j in range(10 * net_config.n_colors):
+            avg_j = to_device(class_averages_list[j], 'cpu')
+            if isinstance(avg_j, cp.ndarray):
+                avg_j = cp.asnumpy(avg_j)
+            avg_j = avg_j.reshape(28, 28, -1)
+            str_rec_matrix[i, j] = ssim(recon_i, avg_j, data_range=1.0, channel_axis=2)
+    
+    # Compute Str-rec Similarity Metrics
+    str_rec_diag_sim = np.diag(str_rec_matrix).mean()
+    str_rec_off_diag_sim = str_rec_matrix[~np.eye(str_rec_matrix.shape[0], dtype=bool)].mean()
+    
+    # Create ID and OOD masks
+    # train_indices = train_config.train_indices  # Ensure this is correctly sourced
+    id_mask = np.zeros(str_rec_matrix.shape[0], dtype=bool)
+    id_mask[train_indices] = True
+    ood_mask = ~id_mask
+    
+    # Compute similarities for ID
+    str_rec_diag_sim_id = np.diag(str_rec_matrix[id_mask][:, id_mask]).mean()
+    str_rec_off_diag_sim_id = str_rec_matrix[id_mask][:, id_mask][~np.eye(np.sum(id_mask), dtype=bool)].mean()
+    
+    # Compute similarities for OOD
+    str_rec_diag_sim_ood = np.diag(str_rec_matrix[ood_mask][:, ood_mask]).mean()
+    str_rec_off_diag_sim_ood = str_rec_matrix[ood_mask][:, ood_mask][~np.eye(np.sum(ood_mask), dtype=bool)].mean()
+    
+    # Save summary with all metrics
     with open(os.path.join(run_dir, 'summary.txt'), 'w') as f:
         f.write("Colored MNIST Experiment Results\n")
         f.write("==============================\n\n")
@@ -1038,39 +1088,18 @@ def train_hebbian_colored_mnist(net_config, train_config):
         f.write(f"StR-rep FN: {format_metric(str_rep_fn, str_rep_fn_p)}\n")
         f.write(f"StR-rep FN Normalized: {format_metric(str_rep_fn_norm, str_rep_fn_norm_p)}\n\n")
         
-        # StR-rec metrics
-        f.write("StR-rec Metrics:\n")
-        f.write("---------------\n")
-        str_rec_matrix = np.zeros((10 * net_config.n_colors, 10 * net_config.n_colors))
-        # Compute full similarity matrix for reconstructions
-        for i in range(10 * net_config.n_colors):
-            for j in range(10 * net_config.n_colors):
-                sim = cosine_similarity(
-                    [to_device(reconstructions[i], 'cpu')],
-                    [to_device(class_averages_list[j], 'cpu')],
-                    xp=np
-                )
-                str_rec_matrix[i, j] = float(sim)
-        
-        str_rec_fn = frobenius_norm_from_identity(str_rec_matrix, return_numpy=True)
-        str_rec_fn_p = test_frobenius(str_rec_fn, 10 * net_config.n_colors)
-        
-        # Create normalized version
-        norm_str_rec = str_rec_matrix.copy()
-        for i in range(norm_str_rec.shape[0]):
-            row_min = norm_str_rec[i].min()
-            row_max = norm_str_rec[i].max()
-            if row_max > row_min:
-                norm_str_rec[i] = (norm_str_rec[i] - row_min) / (row_max - row_min)
-        
-        str_rec_fn_norm = frobenius_norm_from_identity(norm_str_rec, return_numpy=True)
-        str_rec_fn_norm_p = test_frobenius(str_rec_fn_norm, 10 * net_config.n_colors)
-        
-        f.write(f"StR-rec FN: {format_metric(str_rec_fn, str_rec_fn_p)}\n")
-        f.write(f"StR-rec FN Normalized: {format_metric(str_rec_fn_norm, str_rec_fn_norm_p)}\n\n")
+        # Str-rec Metrics
+        f.write("Str-rec Similarity Metrics:\n")
+        f.write("---------------------------\n")
+        f.write(f"Str-rec Diagonal Similarity: {str_rec_diag_sim:.4f}\n")
+        f.write(f"Str-rec Off-diagonal Similarity: {str_rec_off_diag_sim:.4f}\n")
+        f.write(f"Str-rec Diagonal Similarity (ID): {str_rec_diag_sim_id:.4f}\n")
+        f.write(f"Str-rec Off-diagonal Similarity (ID): {str_rec_off_diag_sim_id:.4f}\n")
+        f.write(f"Str-rec Diagonal Similarity (OOD): {str_rec_diag_sim_ood:.4f}\n")
+        f.write(f"Str-rec Off-diagonal Similarity (OOD): {str_rec_off_diag_sim_ood:.4f}\n\n")
         
         # Classification metrics
-        f.write("Classification Metrics:\n")
+        f.write("Constrained Classification Metrics:\n")
         f.write("---------------------\n")
         
         # RtS Classification
@@ -1093,77 +1122,28 @@ def train_hebbian_colored_mnist(net_config, train_config):
         test_full_acc_p = test_accuracy(test_full_acc_rts, 10 * net_config.n_colors, len(test_data))
         f.write(f"ID Full Accuracy: {format_metric(train_full_acc_rts, train_full_acc_p)}\n")
         f.write(f"OOD Full Accuracy: {format_metric(test_full_acc_rts, test_full_acc_p)}\n")
-        
-        # GMCCs for RtS
-        train_digit_gmcc = compute_gmcc(train_digit_conf_rts)
-        test_digit_gmcc = compute_gmcc(test_digit_conf_rts)
-        train_color_gmcc = compute_gmcc(train_color_conf_rts)
-        test_color_gmcc = compute_gmcc(test_color_conf_rts)
-        test_comp_gmcc = compute_gmcc(test_comp_conf_rts)
-        
-        f.write(f"\nID Digit GMCC (RtS): {format_gmcc(train_digit_gmcc, len(train_data))}\n")
-        f.write(f"OOD Digit GMCC (RtS): {format_gmcc(test_digit_gmcc, len(test_data))}\n")
-        f.write(f"ID Color GMCC (RtS): {format_gmcc(train_color_gmcc, len(train_data))}\n")
-        f.write(f"OOD Color GMCC (RtS): {format_gmcc(test_color_gmcc, len(test_data))}\n")
-        f.write(f"OOD Compositional GMCC (RtS): {format_gmcc(test_comp_gmcc, len(test_data))}\n")
-        
-        # Decoder Classification
-        f.write("\nDecoder Classification:\n")
-        
-        # Digit accuracies
-        train_digit_acc_decoder_p = test_accuracy(train_digit_acc_decoder, 10, len(train_data))
-        test_digit_acc_decoder_p = test_accuracy(test_digit_acc_decoder, 10, len(test_data))
-        f.write(f"ID Digit Accuracy: {format_metric(train_digit_acc_decoder, train_digit_acc_decoder_p)}\n")
-        f.write(f"OOD Digit Accuracy: {format_metric(test_digit_acc_decoder, test_digit_acc_decoder_p)}\n")
-        
-        # Color accuracies
-        train_color_acc_decoder_p = test_accuracy(train_color_acc_decoder, net_config.n_colors, len(train_data))
-        test_color_acc_decoder_p = test_accuracy(test_color_acc_decoder, net_config.n_colors, len(test_data))
-        f.write(f"ID Color Accuracy: {format_metric(train_color_acc_decoder, train_color_acc_decoder_p)}\n")
-        f.write(f"OOD Color Accuracy: {format_metric(test_color_acc_decoder, test_color_acc_decoder_p)}\n")
-        
-        # Full compositional accuracies
-        train_full_acc_decoder_p = test_accuracy(train_full_acc_decoder, 10 * net_config.n_colors, len(train_data))
-        test_full_acc_decoder_p = test_accuracy(test_full_acc_decoder, 10 * net_config.n_colors, len(test_data))
-        f.write(f"ID Full Accuracy: {format_metric(train_full_acc_decoder, train_full_acc_decoder_p)}\n")
-        f.write(f"OOD Full Accuracy: {format_metric(test_full_acc_decoder, test_full_acc_decoder_p)}\n")
-        
-        # GMCCs for decoder
-        train_digit_gmcc_decoder = compute_gmcc(train_digit_conf_decoder)
-        test_digit_gmcc_decoder = compute_gmcc(test_digit_conf_decoder)
-        train_color_gmcc_decoder = compute_gmcc(train_color_conf_decoder)
-        test_color_gmcc_decoder = compute_gmcc(test_color_conf_decoder)
-        test_comp_gmcc_decoder = compute_gmcc(test_comp_conf_decoder)
-        
-        f.write(f"\nID Digit GMCC (Decoder): {format_gmcc(train_digit_gmcc_decoder, len(train_data))}\n")
-        f.write(f"OOD Digit GMCC (Decoder): {format_gmcc(test_digit_gmcc_decoder, len(test_data))}\n")
-        f.write(f"ID Color GMCC (Decoder): {format_gmcc(train_color_gmcc_decoder, len(train_data))}\n")
-        f.write(f"OOD Color GMCC (Decoder): {format_gmcc(test_color_gmcc_decoder, len(test_data))}\n")
-        f.write(f"OOD Compositional GMCC (Decoder): {format_gmcc(test_comp_gmcc_decoder, len(test_data))}\n")
-        
-        # Unconstrained metrics
-        f.write("\nUnconstrained Classification:\n")
-        f.write("---------------------------\n")
-        
-        # Compute GMCCs for unconstrained predictions
-        unconstrained_test_gmcc = compute_gmcc(unconstrained_test_comp_conf)
-        
-        # Split into ID and OOD
-        id_mask = np.zeros(10 * net_config.n_colors, dtype=bool)
-        id_mask[train_indices] = True
-        ood_mask = ~id_mask
-        
-        # ID metrics
-        unconstrained_test_id_conf = unconstrained_test_comp_conf[id_mask][:, id_mask]
-        unconstrained_test_id_gmcc = compute_gmcc(unconstrained_test_id_conf)
-        
-        # OOD metrics
-        unconstrained_test_ood_conf = unconstrained_test_comp_conf[ood_mask][:, ood_mask]
-        unconstrained_test_ood_gmcc = compute_gmcc(unconstrained_test_ood_conf)
-        
-        f.write(f"OOD GMCC (All): {format_gmcc(unconstrained_test_gmcc, len(test_data))}\n")
-        f.write(f"OOD GMCC (ID Only): {format_gmcc(unconstrained_test_id_gmcc, len(test_data))}\n")
-        f.write(f"OOD GMCC (OOD Only): {format_gmcc(unconstrained_test_ood_gmcc, len(test_data))}\n")
+
+                
+        f.write("\nRaw Performance Metrics (No Masking/Constraints):\n")
+        f.write("----------------------------------------\n")
+        f.write(f"RtS Overall Raw Accuracy: {raw_full_acc:.4f}\n")
+        f.write(f"RtS Raw ID Accuracy: {raw_id_acc:.4f}\n")
+        f.write(f"RtS Raw OOD Accuracy: {raw_ood_acc:.4f}\n")
+        f.write(f"RtS Raw Digit Accuracy: {raw_digit_acc:.4f}\n")
+        f.write(f"RtS Raw Color Accuracy: {raw_color_acc:.4f}\n")
+        f.write(f"RtS Raw ID Digit Accuracy: {raw_id_digit_acc:.4f}\n")
+        f.write(f"RtS Raw ID Color Accuracy: {raw_id_color_acc:.4f}\n")
+        f.write(f"RtS Raw OOD Digit Accuracy: {raw_ood_digit_acc:.4f}\n")
+        f.write(f"RtS Raw OOD Color Accuracy: {raw_ood_color_acc:.4f}\n\n")
+        f.write(f"Decoder Overall Raw Accuracy: {raw_full_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw ID Accuracy: {raw_id_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw OOD Accuracy: {raw_ood_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw Digit Accuracy: {raw_digit_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw Color Accuracy: {raw_color_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw ID Digit Accuracy: {raw_id_digit_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw ID Color Accuracy: {raw_id_color_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw OOD Digit Accuracy: {raw_ood_digit_acc_decoder:.4f}\n")
+        f.write(f"Decoder Raw OOD Color Accuracy: {raw_ood_color_acc_decoder:.4f}\n\n")
         
         # Detailed matrices
         f.write("\nDetailed Matrices:\n")
@@ -1198,21 +1178,16 @@ def train_hebbian_colored_mnist(net_config, train_config):
             row_str = " ".join(f"{x:.4f}" for x in unconstrained_test_comp_conf[i])
             f.write(f"{row_str}\n")
         f.write("\n")
-        
-        f.write("\nRaw Performance Metrics (No Masking/Constraints):\n")
-        f.write("----------------------------------------\n")
-        f.write(f"Overall Raw Accuracy: {raw_full_acc:.4f}\n")
-        f.write(f"Raw ID Accuracy: {raw_id_acc:.4f}\n")
-        f.write(f"Raw OOD Accuracy: {raw_ood_acc:.4f}\n")
-        f.write(f"Raw Digit Accuracy: {raw_digit_acc:.4f}\n")
-        f.write(f"Raw Color Accuracy: {raw_color_acc:.4f}\n")
-        f.write(f"Raw ID Digit Accuracy: {raw_id_digit_acc:.4f}\n")
-        f.write(f"Raw ID Color Accuracy: {raw_id_color_acc:.4f}\n")
-        f.write(f"Raw OOD Digit Accuracy: {raw_ood_digit_acc:.4f}\n")
-        f.write(f"Raw OOD Color Accuracy: {raw_ood_color_acc:.4f}\n\n")
     
-    # Save results
+    # Assemble results after all computations
     results = {
+        'str_rec_matrix': to_device(str_rec_matrix, 'cpu'),
+        'str_rec_diag_sim': str_rec_diag_sim,
+        'str_rec_off_diag_sim': str_rec_off_diag_sim,
+        'str_rec_diag_sim_id': str_rec_diag_sim_id,
+        'str_rec_off_diag_sim_id': str_rec_off_diag_sim_id,
+        'str_rec_diag_sim_ood': str_rec_diag_sim_ood,
+        'str_rec_off_diag_sim_ood': str_rec_off_diag_sim_ood,
         'train_digit_acc_decoder': train_digit_acc_decoder,
         'train_color_acc_decoder': train_color_acc_decoder,
         'train_full_acc_decoder': train_full_acc_decoder,
@@ -1243,7 +1218,7 @@ def train_hebbian_colored_mnist(net_config, train_config):
         'str_rec_matrix': to_device(str_rec_matrix, 'cpu'),
         'train_indices': train_indices,
         'unconstrained_test_comp_conf': unconstrained_test_comp_conf,
-        'unconstrained_test_comp_conf_ood': unconstrained_test_comp_conf_ood,
+        'unconstrained_test_comp_conf_ood': normalized_ood_conf,
         'raw_full_acc': raw_full_acc,
         'raw_id_acc': raw_id_acc,
         'raw_ood_acc': raw_ood_acc,
@@ -1264,6 +1239,7 @@ def train_hebbian_colored_mnist(net_config, train_config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--hidden_size', type=int, default=200)  # Increased for more capacity
     parser.add_argument('--p', type=float, default=3.0)
     parser.add_argument('--k', type=int, default=7)
@@ -1276,6 +1252,8 @@ if __name__ == "__main__":
     parser.add_argument('--n_colors', type=int, default=2)
     parser.add_argument('--train_ratio', type=float, default=0.8)
     args = parser.parse_args()
+    
+    set_random_seed(args.seed)
     
     net_config = NetworkConfig(
         hidden_sizes=args.hidden_size,

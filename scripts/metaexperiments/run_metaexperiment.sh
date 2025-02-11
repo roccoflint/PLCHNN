@@ -1,52 +1,50 @@
 #!/bin/bash
 
-# Set remote connection details
-REMOTE_HOST="213.173.108.40"
-REMOTE_PORT="39469"
-SSH_KEY="~/.ssh/id_ed25519"
+# Parse command line arguments
+RUN_MNIST=0
+RUN_COLORED_MNIST=0
+CONTINUE_FROM=""
+
+print_usage() {
+    echo "Usage: $0 [--mnist] [--colored-mnist] [--continue_from path/to/study.db]"
+    echo "At least one experiment must be specified"
+    exit 1
+}
 
 # Parse arguments
-N_TRIALS=20  # Fixed number of trials for each study
+[ $# -eq 0 ] && print_usage
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mnist) RUN_MNIST=1 ;;
+        --colored-mnist) RUN_COLORED_MNIST=1 ;;
+        --continue_from) 
+            shift
+            CONTINUE_FROM="$1" ;;
+        *) print_usage ;;
+    esac
+    shift
+done
 
-# Pre-generate timestamps for new studies
-TIMESTAMP_BASE=$(date +%Y%m%d_%H%M%S)
-TIMESTAMP_COLORED_FROB="${TIMESTAMP_BASE}_01"
-TIMESTAMP_COLORED_RAW="${TIMESTAMP_BASE}_02"
+# Set remote connection details
+REMOTE_HOST="213.173.110.202"
+REMOTE_PORT="17227"
+SSH_KEY="~/.ssh/id_ed25519"
 
-# Save initial parameters for new studies
-cat > initial_params.json << EOL
-{
-    "hidden_size": 136,
-    "p": 2.4090317051787107,
-    "k": 3,
-    "delta": 0.22118115364137012,
-    "signific_p_multiplier": 2.4096762883665344,
-    "allow_pathway_interaction": true,
-    "n_epochs": 22,
-    "batch_size": 106,
-    "learning_rate": 0.022182236416172403
-}
-EOL
+# Set trial count
+MNIST_TRIALS=20
+COLORED_MNIST_TRIALS=20
 
-# Create results directory locally
-mkdir -p results
-
-# Check CUDA version on remote and install appropriate packages
-echo "Checking CUDA version on remote..."
-CUDA_VERSION=$(ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "nvidia-smi | grep 'CUDA Version' | awk '{print \$9}' | cut -d'.' -f1")
-if [ -z "$CUDA_VERSION" ]; then
-    echo "Error: Could not detect CUDA version on remote machine"
-    exit 1
+# Set study names
+if [ $RUN_MNIST -eq 1 ]; then
+    MNIST_STUDY="optuna_mnist_single_objective_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "results/${MNIST_STUDY}"
+    cp scripts/metaexperiments/initial_params.json initial_params_mnist.json
 fi
-echo "Detected CUDA version: $CUDA_VERSION"
 
-# Check number of available GPUs
-N_GPUS=$(ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l")
-echo "Detected $N_GPUS GPUs"
-
-if [ "$N_GPUS" -lt 4 ]; then
-    echo "Error: This script requires 4 GPUs, but only $N_GPUS found"
-    exit 1
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    COLORED_MNIST_STUDY="optuna_colored_mnist_single_objective_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "results/${COLORED_MNIST_STUDY}"
+    cp scripts/metaexperiments/initial_params.json initial_params_colored_mnist.json
 fi
 
 # Enable strict error handling
@@ -59,18 +57,18 @@ ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "set -e && \
     apt-get update && \
     apt-get install -y python3.10 python3-pip rsync nvidia-cuda-toolkit"
 
-# Create project directory and sync code first
+# Create project directory and sync code
 echo "Setting up remote environment..."
 ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "set -e && mkdir -p /root/PCHNN"
 
-# Sync with strict error checking
+# Sync code
 echo "Syncing code..."
 rsync -avz --exclude 'results' --exclude '.git' --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' --exclude '.pytest_cache' --exclude '*.egg-info' -e "ssh -p $REMOTE_PORT -i $SSH_KEY" . root@$REMOTE_HOST:/root/PCHNN/ || {
     echo "Error: Failed to sync code"
     exit 1
 }
 
-# Install Python packages with strict verification
+# Install Python packages
 echo "Installing Python packages..."
 ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && \
     python3 -m pip install --upgrade pip && \
@@ -81,53 +79,85 @@ ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && \
         python3 -m pip install --no-cache-dir cupy-cuda12x; \
     elif [ \"\$CUDA_VER\" -ge 11 ]; then \
         python3 -m pip install --no-cache-dir cupy-cuda11x; \
-else \
+    else \
         echo \"Error: Unsupported CUDA version \$CUDA_VER (need 11 or higher)\"; \
-    exit 1; \
-fi"
+        exit 1; \
+    fi"
 
-# Create results directory on remote
-ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "mkdir -p /root/PCHNN/results"
+# Create remote directories with proper permissions
+echo "Creating remote directories..."
+REMOTE_DIRS_CMD="chmod -R 777 /root/PCHNN/results"
+if [ $RUN_MNIST -eq 1 ]; then
+    REMOTE_DIRS_CMD="mkdir -p \"/root/PCHNN/results/${MNIST_STUDY}\" && $REMOTE_DIRS_CMD"
+fi
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    REMOTE_DIRS_CMD="mkdir -p \"/root/PCHNN/results/${COLORED_MNIST_STUDY}\" && $REMOTE_DIRS_CMD"
+fi
+ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "$REMOTE_DIRS_CMD"
 
-echo "Running four parallel studies..."
+# Copy initial parameters to remote
+PARAMS_TO_COPY=""
+if [ $RUN_MNIST -eq 1 ]; then
+    PARAMS_TO_COPY="initial_params_mnist.json"
+fi
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    PARAMS_TO_COPY="$PARAMS_TO_COPY initial_params_colored_mnist.json"
+fi
+rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" $PARAMS_TO_COPY "root@${REMOTE_HOST}:/root/PCHNN/"
 
-# 1. Continue MNIST study with Frobenius norm
-(
-    echo "Continuing MNIST Optuna experiment with Frobenius norm on GPU 0..."
-    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && CUDA_VISIBLE_DEVICES=0 python3 scripts/metaexperiments/optuna_experiment.py --experiment mnist --n_trials $N_TRIALS --use_frobenius --continue_from results/optuna_mnist_optimization_20250130_203813_01/study.db"
-) &
+# Run experiments
+if [ $RUN_MNIST -eq 1 ]; then
+    echo "Running MNIST experiment..."
+    CONTINUE_ARG=""
+    if [ ! -z "$CONTINUE_FROM" ]; then
+        CONTINUE_ARG="--continue_from \"$CONTINUE_FROM\""
+    fi
+    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && \
+        CUDA_VISIBLE_DEVICES=0 python3 scripts/metaexperiments/optuna_experiment.py \
+            --experiment mnist \
+            --n_trials $MNIST_TRIALS \
+            --initial_params_file initial_params_mnist.json \
+            --study_name \"${MNIST_STUDY}\" \
+            --use_frobenius_str \
+            --use_frobenius_rts \
+            $CONTINUE_ARG"
+fi
 
-# 2. Continue colored MNIST study with raw accuracy
-(
-    echo "Continuing colored MNIST Optuna experiment with raw accuracy on GPU 1..."
-    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && CUDA_VISIBLE_DEVICES=1 python3 scripts/metaexperiments/optuna_experiment.py --experiment colored_mnist --n_trials $N_TRIALS --continue_from results/optuna_colored_mnist_optimization_20250130_203813_04/study.db"
-) &
-
-# 3. Start new colored MNIST with raw accuracy and initial parameters
-(
-    echo "Starting new colored MNIST Optuna experiment with raw accuracy and initial parameters on GPU 2..."
-    STUDY_NAME="optuna_colored_mnist_optimization_${TIMESTAMP_COLORED_RAW}"
-    rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" initial_params.json root@$REMOTE_HOST:/root/PCHNN/
-    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && CUDA_VISIBLE_DEVICES=2 python3 scripts/metaexperiments/optuna_experiment.py --experiment colored_mnist --n_trials $N_TRIALS --study_name $STUDY_NAME --initial_params_file initial_params.json"
-) &
-
-# 4. Start new colored MNIST with Frobenius norm and initial parameters
-(
-    echo "Starting new colored MNIST Optuna experiment with Frobenius norm and initial parameters on GPU 3..."
-    STUDY_NAME="optuna_colored_mnist_optimization_${TIMESTAMP_COLORED_FROB}"
-    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && CUDA_VISIBLE_DEVICES=3 python3 scripts/metaexperiments/optuna_experiment.py --experiment colored_mnist --n_trials $N_TRIALS --use_frobenius --study_name $STUDY_NAME --initial_params_file initial_params.json"
-) &
-
-# Wait for all experiments to complete
-wait
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    echo "Running Colored MNIST experiment..."
+    CONTINUE_ARG=""
+    if [ ! -z "$CONTINUE_FROM" ]; then
+        CONTINUE_ARG="--continue_from \"$CONTINUE_FROM\""
+    fi
+    ssh -p $REMOTE_PORT -i $SSH_KEY root@$REMOTE_HOST "cd /root/PCHNN && \
+        CUDA_VISIBLE_DEVICES=0 python3 scripts/metaexperiments/optuna_experiment.py \
+            --experiment colored_mnist \
+            --n_trials $COLORED_MNIST_TRIALS \
+            --initial_params_file initial_params_colored_mnist.json \
+            --study_name \"${COLORED_MNIST_STUDY}\" \
+            --use_frobenius_rts \
+            $CONTINUE_ARG"
+fi
 
 # Sync results back
 echo "Syncing results back..."
-rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
-    root@$REMOTE_HOST:/root/PCHNN/results/optuna_*/ \
-    results/
+if [ $RUN_MNIST -eq 1 ]; then
+    rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
+        "root@${REMOTE_HOST}:/root/PCHNN/results/${MNIST_STUDY}/" \
+        "results/${MNIST_STUDY}/"
+fi
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    rsync -avz -e "ssh -p $REMOTE_PORT -i $SSH_KEY" \
+        "root@${REMOTE_HOST}:/root/PCHNN/results/${COLORED_MNIST_STUDY}/" \
+        "results/${COLORED_MNIST_STUDY}/"
+fi
 
 # Clean up
-rm initial_params.json
+if [ $RUN_MNIST -eq 1 ]; then
+    rm initial_params_mnist.json
+fi
+if [ $RUN_COLORED_MNIST -eq 1 ]; then
+    rm initial_params_colored_mnist.json
+fi
 
 echo "Done! Results saved in results directory."
