@@ -1,5 +1,4 @@
 instructions.md 
-results/
 __pycache__/
 .DS_Store
 *.pyc 

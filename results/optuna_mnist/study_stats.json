@@ -1,0 +1,24 @@
+{
+  "best_trial": {
+    "number": 15,
+    "value": 0.19726600412950676,
+    "params": {
+      "hidden_size": 279,
+      "p": 2.714883638153625,
+      "k": 2,
+      "delta": 0.28465526260963947,
+      "signific_p_multiplier": 3.7436589860695477,
+      "allow_pathway_interaction": false,
+      "n_epochs": 44,
+      "batch_size": 115,
+      "learning_rate": 0.024016150567880895
+    }
+  },
+  "pareto_front": null,
+  "n_trials": 20,
+  "n_complete": 0,
+  "use_frobenius_str": true,
+  "use_frobenius_rts": true,
+  "study_name": "optuna_mnist_single_objective_20250202_130033",
+  "storage_path": "results/optuna_mnist_single_objective_20250202_130033/study.db"
+}

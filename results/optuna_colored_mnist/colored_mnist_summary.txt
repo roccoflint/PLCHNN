@@ -1,0 +1,156 @@
+
+Objective 0:
+--------------------------------------------------
+Optimization History:
+Trial 0: 0.5166592977551978
+Trial 1: 0.5376933343094356
+Trial 2: 0.12186616751226238
+Trial 3: 0.4585414873729
+Trial 4: 0.6448269448314294
+Trial 5: 0.6266471304187562
+Trial 6: 0.33921081661069163
+Trial 7: 0.13512864975937056
+Trial 8: 0.6409376179831804
+Trial 9: 0.13665912285735754
+Trial 10: 0.09717424945685242
+Trial 11: 0.08423761522468784
+Trial 12: 0.6322500992312644
+Trial 13: 0.25948619844445503
+Trial 14: 0.6785398347986461
+Trial 15: 0.15000520601750658
+Trial 16: 0.10868845104412735
+Trial 17: 0.19669862374717756
+Trial 18: 0.18417137380113516
+Trial 19: 0.6325528710914526
+
+Parameter Importances:
+delta: 0.3910
+batch_size: 0.2414
+p: 0.1752
+k: 0.1048
+learning_rate: 0.0229
+allow_pathway_interaction: 0.0192
+hidden_size: 0.0169
+n_epochs: 0.0146
+signific_p_multiplier: 0.0140
+
+
+Objective 1:
+--------------------------------------------------
+Optimization History:
+Trial 0: 0.5313589140218317
+Trial 1: 0.5442552680223908
+Trial 2: 0.15444274314545134
+Trial 3: 0.47869251462487916
+Trial 4: 0.643725285285092
+Trial 5: 0.6249799199761228
+Trial 6: 0.40757195948934277
+Trial 7: 0.16838406737385972
+Trial 8: 0.6421550389020267
+Trial 9: 0.17381280857216608
+Trial 10: 0.13891402484667234
+Trial 11: 0.1265139888215026
+Trial 12: 0.6278893491259454
+Trial 13: 0.2881932388916384
+Trial 14: 0.6759924986433237
+Trial 15: 0.17686472908602244
+Trial 16: 0.149939074156465
+Trial 17: 0.24908883925760703
+Trial 18: 0.21109319233983861
+Trial 19: 0.6287691203730537
+
+Parameter Importances:
+delta: 0.4535
+batch_size: 0.1695
+k: 0.1184
+p: 0.0715
+allow_pathway_interaction: 0.0575
+hidden_size: 0.0376
+learning_rate: 0.0361
+signific_p_multiplier: 0.0343
+n_epochs: 0.0217
+
+
+Objective 2:
+--------------------------------------------------
+Optimization History:
+Trial 0: 0.08055923153283051
+Trial 1: 0.09220740569615592
+Trial 2: 0.0844473883848558
+Trial 3: 0.07895077556348053
+Trial 4: 0.1410007267189339
+Trial 5: 0.1723923771303391
+Trial 6: 0.16245308108558773
+Trial 7: 0.08270284677331076
+Trial 8: 0.09601678029877668
+Trial 9: 0.07872312077104394
+Trial 10: 0.09286197892371584
+Trial 11: 0.08534336265396143
+Trial 12: 0.13099686603699562
+Trial 13: 0.07774223685904605
+Trial 14: 0.2099638910808849
+Trial 15: 0.08031395262885717
+Trial 16: 0.07489119935423927
+Trial 17: 0.08361423422024157
+Trial 18: 0.07943035298644939
+Trial 19: 0.0950440031114604
+
+Parameter Importances:
+delta: 0.4007
+k: 0.2194
+learning_rate: 0.1267
+signific_p_multiplier: 0.1121
+n_epochs: 0.0880
+batch_size: 0.0286
+hidden_size: 0.0146
+p: 0.0071
+allow_pathway_interaction: 0.0027
+
+
+Objective 3:
+--------------------------------------------------
+Optimization History:
+Trial 0: 0.1722063278796617
+Trial 1: 0.1551785494950136
+Trial 2: 0.20729726334816698
+Trial 3: 0.1908959785505709
+Trial 4: 0.26274093877965393
+Trial 5: 0.4690596182409114
+Trial 6: 0.30311161238363926
+Trial 7: 0.1649376939849921
+Trial 8: 0.20057030754106814
+Trial 9: 0.19059109894860524
+Trial 10: 0.1673764367722667
+Trial 11: 0.15457749587613445
+Trial 12: 0.23025899644816833
+Trial 13: 0.1748202736998567
+Trial 14: 0.38013040791992414
+Trial 15: 0.25309618307076587
+Trial 16: 0.13272946151047252
+Trial 17: 0.14235567476857083
+Trial 18: 0.2231435511892097
+Trial 19: 0.14341792282098056
+
+Parameter Importances:
+delta: 0.4148
+k: 0.2412
+learning_rate: 0.1188
+signific_p_multiplier: 0.0659
+hidden_size: 0.0578
+batch_size: 0.0453
+n_epochs: 0.0363
+p: 0.0178
+allow_pathway_interaction: 0.0021
+
+
+Average Parameter Importances Across All Objectives:
+--------------------------------------------------
+delta: 0.4150
+k: 0.1709
+batch_size: 0.1212
+learning_rate: 0.0761
+p: 0.0679
+signific_p_multiplier: 0.0566
+n_epochs: 0.0401
+hidden_size: 0.0317
+allow_pathway_interaction: 0.0204

@@ -1,0 +1,51 @@
+{
+  "best_trial": null,
+  "pareto_front": [
+    {
+      "number": 11,
+      "values": [
+        0.08423761522468784,
+        0.1265139888215026,
+        0.08534336265396143,
+        0.15457749587613445
+      ],
+      "params": {
+        "hidden_size": 107,
+        "p": 3.272820822527561,
+        "k": 3,
+        "delta": 0.4034282764658811,
+        "signific_p_multiplier": 3.722699421778279,
+        "allow_pathway_interaction": false,
+        "n_epochs": 48,
+        "batch_size": 78,
+        "learning_rate": 0.011227530419758448
+      }
+    },
+    {
+      "number": 16,
+      "values": [
+        0.10868845104412735,
+        0.149939074156465,
+        0.07489119935423927,
+        0.13272946151047252
+      ],
+      "params": {
+        "hidden_size": 304,
+        "p": 2.4791237813339446,
+        "k": 2,
+        "delta": 0.3957811041110252,
+        "signific_p_multiplier": 3.956951362331802,
+        "allow_pathway_interaction": false,
+        "n_epochs": 48,
+        "batch_size": 79,
+        "learning_rate": 0.029900608845171685
+      }
+    }
+  ],
+  "n_trials": 20,
+  "n_complete": 0,
+  "use_frobenius_str": false,
+  "use_frobenius_rts": true,
+  "study_name": "optuna_colored_mnist_single_objective_20250203_133546",
+  "storage_path": "results/optuna_colored_mnist_single_objective_20250203_133546/study.db"
+}

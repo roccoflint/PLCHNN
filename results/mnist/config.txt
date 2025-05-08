@@ -1,0 +1,16 @@
+Network Configuration:
+hidden_sizes: [279]
+n_colors: None
+p: 2.714883638153625
+delta: 0.28465526260963947
+k: 2
+allow_pathway_interaction: False
+signific_p_multiplier: 3.7436589860695477
+
+Training Configuration:
+n_epochs: 44
+batch_size: 115
+eval_batch_size: 1000
+learning_rate: 0.024016150567880895
+train_ratio: 0.8
+save_dir: results

@@ -1,0 +1,42 @@
+MNIST Optimization Summary
+==================================================
+
+Note on Parameter Importance Values:
+The importance values are calculated using Functional ANOVA (FANOVA) and represent
+each parameter's contribution to the variance in the objective value.
+Values are normalized to sum to 1.0. Higher values indicate parameters that
+have a stronger effect on the optimization outcome.
+
+Optimization History:
+Trial 0: 1.072743166087539
+Trial 1: 2.246910365535334
+Trial 2: 0.723932431702735
+Trial 3: 3.293533409913545
+Trial 4: 3.265601749092177
+Trial 5: 3.5655051275503284
+Trial 6: 2.5617124422211743
+Trial 7: 0.6906479402488216
+Trial 8: 3.7377681306771056
+Trial 9: 0.6854880801206914
+Trial 10: 0.253639085831364
+Trial 11: 0.41432831590434094
+Trial 12: 1.4416023631091632
+Trial 13: 0.29407150616222577
+Trial 14: 0.6136421224217558
+Trial 15: 0.19726600412950676
+Trial 16: 0.21030046464081603
+Trial 17: 0.3514803313257849
+Trial 18: 1.5671376642971993
+Trial 19: 0.2539550528131347
+
+Parameter Importances:
+delta: 0.4353
+learning_rate: 0.3294
+allow_pathway_interaction: 0.0764
+n_epochs: 0.0759
+p: 0.0299
+k: 0.0278
+batch_size: 0.0102
+signific_p_multiplier: 0.0077
+hidden_size: 0.0074
+
