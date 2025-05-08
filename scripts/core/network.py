@@ -16,8 +16,6 @@ class HebbianLayer:
         self.p = p
         self.delta = delta
         self.k = k
-        
-        # Initialize weights - no normalization yet, exactly as in KH
         self.W = None
         self.xp = None
         
@@ -38,25 +36,20 @@ class HebbianLayer:
     
     def update(self, x, learning_rate):
         """Update weights using KH's exact learning rule."""
-        # Forward pass
         tot_input = self.forward(x)
         
-        # Learning rule exactly as in KH
         y = self.xp.argsort(tot_input, axis=0)
         yl = self.xp.zeros_like(tot_input)
         yl[y[-1, :], self.xp.arange(x.shape[0])] = 1.0
         yl[y[-self.k, :], self.xp.arange(x.shape[0])] = -self.delta
         
-        # Weight updates exactly as in KH
         xx = self.xp.sum(yl * tot_input, axis=1)
         ds = self.xp.dot(yl, x) - xx[:, None] * self.W
         
-        # Normalize updates exactly as in KH
         nc = self.xp.amax(self.xp.abs(ds))
         if nc < 1e-30:
             nc = 1e-30
         
-        # Update weights - no extra normalization
         self.W += learning_rate * (ds / nc)
     
     def to_device(self, device, xp):
@@ -75,14 +68,12 @@ class HebbianNetwork:
         self.device = 'cpu' if not HAS_CUDA or device == 'cpu' else 'gpu'
         self.xp = np if self.device == 'cpu' else cp
         
-        # Core parameters
         self.p = p
         self.delta = delta
         self.k = k
         self.allow_pathway_interaction = allow_pathway_interaction
         self.signific_p_multiplier = signific_p_multiplier
         
-        # Create layers
         self.layers = []
         for i in range(len(layer_sizes) - 1):
             layer = HebbianLayer(
@@ -95,7 +86,6 @@ class HebbianNetwork:
             layer.to_device(self.device, self.xp)
             self.layers.append(layer)
             
-        # Initialize signific pathway if specified
         self.signific_size = signific_size
         if signific_size is not None:
             if hidden_signific_connections is None:
@@ -108,7 +98,6 @@ class HebbianNetwork:
             
             for i, is_connected in enumerate(hidden_signific_connections):
                 if is_connected:
-                    # Initialize exactly as in KH
                     self.signific_weights.append(
                         self.xp.random.normal(0.0, 1.0, (signific_size, layer_sizes[i+1]))
                     )
@@ -122,7 +111,6 @@ class HebbianNetwork:
         """Forward pass through network, implementing KH's activation exactly."""
         x = to_device(x, self.device)
         
-        # Forward through layers
         h = x
         activations = [h]
         for layer in self.layers:
@@ -130,20 +118,17 @@ class HebbianNetwork:
             activations.append(h)
             
         if not allow_pathway_interaction and self.signific_weights is not None:
-            # Project hidden activations to signific layer
             signific_inputs = []
             num_connected = sum(1 for is_connected in self.hidden_signific_connections if is_connected)
             
             if num_connected > 0:
                 for i, (is_connected, W) in enumerate(zip(self.hidden_signific_connections, self.signific_weights)):
                     if is_connected:
-                        # Apply KH's exact activation function with increased power
                         sig = self.xp.sign(W)
                         abs_weights = self.xp.abs(W)**(self.p * self.signific_p_multiplier - 1)
                         signific_input = self.xp.dot(sig * abs_weights, activations[i+1].T)
                         signific_inputs.append(signific_input)
                 
-                # Stack and combine inputs without scaling
                 h = self.xp.sum(self.xp.stack(signific_inputs, axis=0), axis=0)
             else:
                 h = self.xp.zeros((self.signific_size, x.shape[0]), dtype=x.dtype)
@@ -158,55 +143,45 @@ class HebbianNetwork:
         if signific_pattern is not None:
             signific_pattern = to_device(signific_pattern, self.device)
         
-        # Forward and collect activations
         activations = [x]
         h = x
         for layer in self.layers:
-            # If pathway interaction is allowed, get signific input for this layer
             signific_input = None
             if self.allow_pathway_interaction and signific_pattern is not None:
                 signific_acts = self._get_hidden_activations(signific_pattern, is_signific=True)
                 if len(signific_acts) > len(activations)-1:  # If this layer has signific connections
                     signific_input = signific_acts[len(activations)-1].T
             
-            # Forward pass with potential signific input
             h = layer.forward(h, signific_input, self.allow_pathway_interaction).T
             activations.append(h)
         
-        # Update each layer using KH's rule
         for i, layer in enumerate(self.layers):
             layer.update(activations[i], learning_rate)
             
-        # Update signific pathway using KH's rule with increased power
         if signific_pattern is not None and self.signific_weights is not None:
             for i, (is_connected, W) in enumerate(zip(self.hidden_signific_connections, self.signific_weights)):
                 if is_connected:
                     hidden_activations = activations[i+1]
                     
-                    # Forward pass with increased power
                     sig = self.xp.sign(W)
                     tot_input = self.xp.dot(sig * self.xp.abs(W)**(self.p * self.signific_p_multiplier - 1), hidden_activations.T)
                     
-                    # Learning rule treating digit-color pairs as atomic units
                     yl = self.xp.zeros_like(tot_input)
                     
-                    # Split signific pattern into components (digit and color if present)
                     n_digits = 10  # First 10 positions are digits
                     digit_pattern = signific_pattern[:, :n_digits]
                     has_colors = signific_pattern.shape[1] > n_digits
                     
-                    # Get target indices for each component
                     digit_targets = self.xp.argmax(digit_pattern, axis=1)
                     batch_indices = self.xp.arange(x.shape[0])
                     
                     if has_colors:
-                        # Handle colored MNIST case
                         color_pattern = signific_pattern[:, n_digits:]
                         color_targets = self.xp.argmax(color_pattern, axis=1) + n_digits
                         # # For split one hot enocidng:
                         # yl[digit_targets, batch_indices] = 0.5
                         # yl[color_targets, batch_indices] = 0.5
-                        # For two hote encoding:
+                        # For two hot encoding:
                         yl[digit_targets, batch_indices] = 1.0
                         yl[color_targets, batch_indices] = 1.0
                         # Create mask for all positions except the target digit-color pair
@@ -214,9 +189,7 @@ class HebbianNetwork:
                         mask[digit_targets, batch_indices] = False
                         mask[color_targets, batch_indices] = False
                     else:
-                        # Handle regular MNIST case
                         yl[digit_targets, batch_indices] = 1.0  # Full +1.0 for digit
-                        # Create mask for all positions except the target digit
                         mask = self.xp.ones_like(tot_input, dtype=bool)
                         mask[digit_targets, batch_indices] = False
                     
@@ -225,7 +198,6 @@ class HebbianNetwork:
                     competitors = self.xp.argsort(inputs, axis=0)[-self.k:]
                     yl[competitors, batch_indices] = -self.delta / self.k  # Distribute delta across k competitors
                     
-                    # Update weights exactly as KH
                     xx = self.xp.sum(yl * tot_input, axis=1)
                     ds = self.xp.dot(yl, hidden_activations) - xx[:, None] * W
                     nc = self.xp.amax(self.xp.abs(ds))
