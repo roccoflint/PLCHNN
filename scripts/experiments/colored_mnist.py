@@ -992,12 +992,12 @@ def train_hebbian_colored_mnist(net_config, train_config):
             
             # Compare with class average using SSIM
             recon_img = to_device(recon[0], 'cpu')
-            if isinstance(recon_img, cp.ndarray):
+            if HAS_CUDA:
                 recon_img = cp.asnumpy(recon_img)
             recon_img = recon_img.reshape(28, 28, -1)
             
             avg_img = to_device(class_averages[(digit, color)], 'cpu')
-            if isinstance(avg_img, cp.ndarray):
+            if HAS_CUDA:
                 avg_img = cp.asnumpy(avg_img)
             avg_img = avg_img.reshape(28, 28, -1)
             
@@ -1034,13 +1034,13 @@ def train_hebbian_colored_mnist(net_config, train_config):
     str_rec_matrix = np.zeros((10 * net_config.n_colors, 10 * net_config.n_colors))
     for i in range(10 * net_config.n_colors):
         recon_i = to_device(reconstructions[i], 'cpu')
-        if isinstance(recon_i, cp.ndarray):
+        if HAS_CUDA:
             recon_i = cp.asnumpy(recon_i)
         recon_i = recon_i.reshape(28, 28, -1)
         
         for j in range(10 * net_config.n_colors):
             avg_j = to_device(class_averages_list[j], 'cpu')
-            if isinstance(avg_j, cp.ndarray):
+            if HAS_CUDA:
                 avg_j = cp.asnumpy(avg_j)
             avg_j = avg_j.reshape(28, 28, -1)
             str_rec_matrix[i, j] = ssim(recon_i, avg_j, data_range=1.0, channel_axis=2)
