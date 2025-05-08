@@ -1,6 +1,6 @@
 # Primitive Linguistic Compositionality in a Hebbian Neural Network
 
-This repository contains the code required to replicate the experiments in the titular paper published in (Proceedings of the Annual Meeting of the Cognitive Science Society)[https://escholarship.org/uc/cognitivesciencesociety].
+This repository contains the code required to replicate the experiments in the titular paper published in [Proceedings of the Annual Meeting of the Cognitive Science Society](https://escholarship.org/uc/cognitivesciencesociety).
 
 ## Warning
 
@@ -9,6 +9,12 @@ This work was exploratory in nature. The codebase was thus developed as a playgr
 This work is part of a broader research program of the first author. If a future work in this program uses these or highly similar rules, it will be linked here.
 
 ## Quickstart
+
+First, install requirements with:
+
+```
+pip install -r requirements.txt
+```
 
 To replicate Experiment 1 (noncompositional MNIST), clone the repository and run the following command:
 

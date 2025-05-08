@@ -1,13 +1,9 @@
-numpy>=1.26.3
-scipy>=1.15.1
-matplotlib>=3.10.0
-tqdm>=4.67.1
-scikit-image>=0.25.0
-pandas>=2.2.3
-torch>=2.4.1
-torchvision>=0.19.1
-optuna>=4.2.0
-plotly>=5.24.1
-kaleido>=0.2.1
-scikit-learn>=1.6.1
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.5.0
+tqdm>=4.60.0
+scikit-image>=0.18.0
+optuna>=3.0.0
+torch>=1.12.0
+torchvision>=0.13.0
 # CUDA packages will be installed based on detected CUDA version
